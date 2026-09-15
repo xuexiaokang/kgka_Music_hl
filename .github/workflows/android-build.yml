@@ -58,12 +58,10 @@ jobs:
         run: |
           if [ -n "$KS_B64" ]; then
             echo "$KS_B64" | base64 -d > "$GITHUB_WORKSPACE/android/release-keystore.p12"
-            cat > "$GITHUB_WORKSPACE/android/key.properties" <<EOF
-storeFile=release-keystore.p12
-storePassword=$KS_PASS
-keyAlias=$KS_ALIAS
-keyPassword=$KS_PASS
-EOF
+            echo "storeFile=release-keystore.p12" > "$GITHUB_WORKSPACE/android/key.properties"
+            echo "storePassword=$KS_PASS" >> "$GITHUB_WORKSPACE/android/key.properties"
+            echo "keyAlias=$KS_ALIAS" >> "$GITHUB_WORKSPACE/android/key.properties"
+            echo "keyPassword=$KS_PASS" >> "$GITHUB_WORKSPACE/android/key.properties"
             echo "Release signing configured (alias=$KS_ALIAS)"
           else
             echo "No release signing secrets; fallback to debug signing"
