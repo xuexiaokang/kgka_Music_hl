@@ -56,3 +56,6 @@ key.properties
 .session/
 .cache/
 logs/
+
+# 本地构建产物（含 keystore/密码/APK），严禁入库
+build-artifacts/
