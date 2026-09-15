@@ -47,6 +47,28 @@ jobs:
       - name: Install dependencies
         run: flutter pub get
 
+      # 若仓库配置了发布签名 secrets，则解密生成 android/key.properties（gitignore 不入库），
+      # 使每次 CI 构建使用同一固定 release 签名，产物间可互相覆盖安装；
+      # 未配置 secrets 时保持原行为：回退 debug 签名。
+      - name: Setup release signing
+        env:
+          KS_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+          KS_PASS: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KS_ALIAS: ${{ secrets.ANDROID_KEYSTORE_ALIAS }}
+        run: |
+          if [ -n "$KS_B64" ]; then
+            echo "$KS_B64" | base64 -d > "$GITHUB_WORKSPACE/android/release-keystore.p12"
+            cat > "$GITHUB_WORKSPACE/android/key.properties" <<EOF
+storeFile=release-keystore.p12
+storePassword=$KS_PASS
+keyAlias=$KS_ALIAS
+keyPassword=$KS_PASS
+EOF
+            echo "Release signing configured (alias=$KS_ALIAS)"
+          else
+            echo "No release signing secrets; fallback to debug signing"
+          fi
+
       # release 构建：仓库未配置 android/key.properties（已被 .gitignore 忽略），
       # build.gradle.kts 会自动回退使用 debug 签名，产物可直接安装。
       # JitPack 的 SuperLyricApi 是"首次请求时才懒构建"，冷启动可能 404 或极慢，
@@ -58,6 +80,15 @@ jobs:
             sleep 90
             flutter build apk --release
           }
+
+      - name: Verify APK signature
+        run: |
+          APKSIGNER=$(ls "$ANDROID_HOME"/build-tools/*/apksigner 2>/dev/null | tail -1)
+          if [ -n "$APKSIGNER" ]; then
+            "$APKSIGNER" verify --print-certs build/app/outputs/flutter-apk/app-release.apk
+          else
+            echo "apksigner not found, skip"
+          fi
 
       - name: Upload APK as Artifact
         uses: actions/upload-artifact@v4
