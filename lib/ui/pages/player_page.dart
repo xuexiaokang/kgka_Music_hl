@@ -401,121 +401,64 @@ String _lyricDisplayModeLabel(_LyricDisplayMode mode) {
   };
 }
 
-class _ArtworkBackground extends StatefulWidget {
-  const _ArtworkBackground({
-    required this.song,
-    this.isPaused = false,
-  });
+class _ArtworkBackground extends StatelessWidget {
+  // 本地实现为静态模糊背景（旋转动画在中央封面小图），无旋转动画需要暂停；
+  // isPaused 仅保留以兼容上游调用方（播放页翻页/滚动时传入）。
+  const _ArtworkBackground({required this.song, this.isPaused = false});
 
   final Song song;
   final bool isPaused;
 
   @override
-  State<_ArtworkBackground> createState() => _ArtworkBackgroundState();
-}
-
-class _ArtworkBackgroundState extends State<_ArtworkBackground>
-    with SingleTickerProviderStateMixin, WidgetsBindingObserver {
-  late final AnimationController _rotationController;
-
-  @override
-  void initState() {
-    super.initState();
-    WidgetsBinding.instance.addObserver(this);
-    _rotationController = AnimationController(
-      vsync: this,
-      duration: const Duration(seconds: 40),
-    );
-    if (!widget.isPaused) {
-      _rotationController.repeat();
-    }
-  }
-
-  @override
-  void didUpdateWidget(covariant _ArtworkBackground oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (oldWidget.isPaused != widget.isPaused) {
-      if (widget.isPaused) {
-        if (_rotationController.isAnimating) _rotationController.stop();
-      } else {
-        if (!_rotationController.isAnimating) _rotationController.repeat();
-      }
-    }
-  }
-
-  @override
-  void didChangeAppLifecycleState(AppLifecycleState state) {
-    super.didChangeAppLifecycleState(state);
-    if (state == AppLifecycleState.resumed) {
-      if (!widget.isPaused && !_rotationController.isAnimating) {
-        _rotationController.repeat();
-      }
-    } else {
-      if (_rotationController.isAnimating) _rotationController.stop();
-    }
-  }
-
-  @override
-  void dispose() {
-    WidgetsBinding.instance.removeObserver(this);
-    _rotationController.dispose();
-    super.dispose();
-  }
-
-  @override
   Widget build(BuildContext context) {
-    final coverUrl = widget.song.coverUrl;
+    final coverUrl = song.coverUrl;
     final size = MediaQuery.sizeOf(context);
     final maxDim = math.max(size.width, size.height);
-    final bgDim = maxDim.clamp(300.0, 900.0);
+    final bgDim = maxDim.clamp(300.0, 640.0);
 
-    // 旋转动画背景是纯装饰性的，排除语义树防止 Windows AXTree 竞态崩溃，并用 RepaintBoundary 彻底隔离图层
-    return RepaintBoundary(
-      child: ExcludeSemantics(
-        child: Stack(
-          fit: StackFit.expand,
-          children: [
-            // 始终显示渐变兜底背景，避免封面加载期间出现纯黑背景
-            const _FallbackBackground(),
-            if (coverUrl != null)
-              Center(
-                child: SizedBox(
-                  width: bgDim,
-                  height: bgDim,
-                  child: RotationTransition(
-                    turns: _rotationController,
-                    child: RepaintBoundary(
-                      child: ImageFiltered(
-                        imageFilter: ImageFilter.blur(sigmaX: 28, sigmaY: 28),
-                        child: Image.network(
-                          coverUrl,
-                          fit: BoxFit.cover,
-                          cacheWidth: 360,
-                          cacheHeight: 360,
-                          errorBuilder: (context, error, stackTrace) =>
-                              const SizedBox.shrink(),
-                        ),
-                      ),
+    // 背景封面图静态模糊即可（旋转动画放到中央封面小图上，成本低得多），
+    // 避免播放期间每一帧都对整张大图重新做高斯模糊。
+    return ExcludeSemantics(
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          // 始终显示渐变兜底背景，避免封面加载期间出现纯黑背景
+          const _FallbackBackground(),
+          if (coverUrl != null)
+            Center(
+              child: SizedBox(
+                width: bgDim,
+                height: bgDim,
+                child: RepaintBoundary(
+                  child: ImageFiltered(
+                    imageFilter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
+                    child: Image.network(
+                      coverUrl,
+                      fit: BoxFit.cover,
+                      cacheWidth: 360,
+                      cacheHeight: 360,
+                      errorBuilder: (context, error, stackTrace) =>
+                          const SizedBox.shrink(),
                     ),
                   ),
                 ),
               ),
-            DecoratedBox(
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
-                  colors: [
-                    Colors.black.withValues(alpha: .32),
-                    Colors.black.withValues(alpha: .56),
-                    Colors.black.withValues(alpha: .82),
-                  ],
-                ),
+            ),
+          DecoratedBox(
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+                colors: [
+                  Colors.black.withValues(alpha: .32),
+                  Colors.black.withValues(alpha: .56),
+                  Colors.black.withValues(alpha: .82),
+                ],
               ),
             ),
-            ColoredBox(color: Colors.black.withValues(alpha: .12)),
-          ],
-        ),
+          ),
+          ColoredBox(color: Colors.black.withValues(alpha: .12)),
+        ],
       ),
     );
   }
@@ -1392,9 +1335,50 @@ class _PosterPlayerPage extends StatefulWidget {
 }
 
 class _PosterPlayerPageState extends State<_PosterPlayerPage>
-    with AutomaticKeepAliveClientMixin {
+    with AutomaticKeepAliveClientMixin, SingleTickerProviderStateMixin {
   @override
   bool get wantKeepAlive => true;
+
+  late final AnimationController _rotationController;
+
+  @override
+  void initState() {
+    super.initState();
+    _rotationController = AnimationController(
+      vsync: this,
+      duration: const Duration(seconds: 40),
+    );
+    widget.player.addListener(_syncRotation);
+    _syncRotation();
+  }
+
+  @override
+  void didUpdateWidget(covariant _PosterPlayerPage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.song.hash != widget.song.hash) {
+      _rotationController.value = 0;
+    }
+    _syncRotation();
+  }
+
+  /// 中央封面旋转跟随播放状态：暂停即停转，避免白耗 GPU。
+  void _syncRotation() {
+    if (!mounted) return;
+    if (widget.player.isPlaying) {
+      if (!_rotationController.isAnimating) {
+        _rotationController.repeat();
+      }
+    } else if (_rotationController.isAnimating) {
+      _rotationController.stop(canceled: false);
+    }
+  }
+
+  @override
+  void dispose() {
+    widget.player.removeListener(_syncRotation);
+    _rotationController.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -1402,34 +1386,108 @@ class _PosterPlayerPageState extends State<_PosterPlayerPage>
     return LayoutBuilder(
       builder: (context, constraints) {
         final compact = constraints.maxHeight < 620;
+        // 极矮横屏（某些分辨率）下：隐藏歌词预览/评论入口，优先保证控制按钮可见
+        final tiny = constraints.maxHeight < 460;
         final artworkMaxWidth = compact ? 250.0 : 330.0;
 
         return Padding(
           padding: const EdgeInsets.fromLTRB(28, 12, 28, 18),
           child: Column(
             children: [
-              const Spacer(),
-              ConstrainedBox(
-                constraints: BoxConstraints(maxWidth: artworkMaxWidth),
-                child: AspectRatio(
-                  aspectRatio: 1,
-                  child: Hero(
-                    tag: 'player_cover',
-                    child: Artwork(
-                    url: widget.song.coverUrl,
-                    size: double.infinity,
-                    borderRadius: 8,
-                  ),
+              // 唱片区弹性缩放：高度不足时唱片自动缩小，
+              // 底部控制按钮永远不会被挤出屏幕。
+              Expanded(
+                child: Center(
+                  child: FittedBox(
+                    fit: BoxFit.scaleDown,
+                    child: SizedBox.square(
+                      dimension: artworkMaxWidth,
+                      child: Hero(
+                        tag: 'player_cover',
+                        child: RepaintBoundary(
+                          child: RotationTransition(
+                            turns: _rotationController,
+                            child: Stack(
+                              alignment: Alignment.center,
+                              children: [
+                                // 圆形唱片盘体
+                                DecoratedBox(
+                                  decoration: BoxDecoration(
+                                    shape: BoxShape.circle,
+                                    gradient: RadialGradient(
+                                      colors: [
+                                        Colors.white.withValues(alpha: .88),
+                                        Colors.white.withValues(alpha: .58),
+                                        Colors.white.withValues(alpha: .22),
+                                      ],
+                                      stops: const [0, .62, 1],
+                                    ),
+                                    boxShadow: [
+                                      BoxShadow(
+                                        color: Colors.black.withValues(alpha: .26),
+                                        blurRadius: 30,
+                                        offset: const Offset(0, 18),
+                                      ),
+                                    ],
+                                  ),
+                                  child: const SizedBox.expand(),
+                                ),
+                                // 盘面同心环纹理
+                                for (final ratio in const [.36, .52, .68, .82])
+                                  FractionallySizedBox(
+                                    widthFactor: ratio,
+                                    heightFactor: ratio,
+                                    child: DecoratedBox(
+                                      decoration: BoxDecoration(
+                                        shape: BoxShape.circle,
+                                        border: Border.all(
+                                          color:
+                                              Colors.white.withValues(alpha: .16),
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                // 中央圆形封面
+                                FractionallySizedBox(
+                                  widthFactor: .74,
+                                  heightFactor: .74,
+                                  child: ClipOval(
+                                    child: Artwork(
+                                      url: widget.song.coverUrl,
+                                      size: double.infinity,
+                                      borderRadius: 8,
+                                    ),
+                                  ),
+                                ),
+                                // 中心孔
+                                FractionallySizedBox(
+                                  widthFactor: .08,
+                                  heightFactor: .08,
+                                  child: DecoratedBox(
+                                    decoration: BoxDecoration(
+                                      shape: BoxShape.circle,
+                                      color: Colors.white.withValues(alpha: .82),
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
                   ),
                 ),
               ),
-              SizedBox(height: compact ? 14 : 26),
-              _PosterLyricPreview(
-                player: widget.player,
-                isPageVisible: widget.isPageVisible,
-              ),
-              if (!compact) const SizedBox(height: 4),
-              _CommentEntry(player: widget.player, song: widget.song),
+              if (!tiny) ...[
+                SizedBox(height: compact ? 14 : 26),
+                _PosterLyricPreview(
+                  player: widget.player,
+                  isPageVisible: widget.isPageVisible,
+                ),
+                if (!compact) const SizedBox(height: 4),
+                _CommentEntry(player: widget.player, song: widget.song),
+              ],
               const Spacer(),
               _Progress(player: widget.player, bright: true),
               const SizedBox(height: 10),
@@ -2294,117 +2352,119 @@ class _Progress extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return AnimatedBuilder(
-      animation: player,
-      builder: (context, _) {
-        final max = player.duration.inMilliseconds <= 0
-            ? 1.0
-            : player.duration.inMilliseconds.toDouble();
-        final value = player.smoothPosition.inMilliseconds
-            .clamp(0, max.toInt())
-            .toDouble();
-        final textColor = bright
-            ? Colors.white.withValues(alpha: .64)
-            : Theme.of(context).colorScheme.onSurfaceVariant;
-        // 高潮片段时间点（进度条小圆点），无高潮或无效时为空。
-        final climax = player.climax;
-        final climaxFraction = climax != null &&
-                climax.isValid &&
-                max > 0 &&
-                climax.startTime.inMilliseconds <= max.toInt()
-            ? climax.startTime.inMilliseconds / max
-            : null;
+    // 进度高频变化：仅订阅 positionNotifier 重建本组件，
+    // 不依赖外层 AnimatedBuilder(player) 的全量广播。
+    return ValueListenableBuilder<Duration>(
+      valueListenable: player.positionNotifier,
+      builder: (context, position, _) {
+    final max = player.duration.inMilliseconds <= 0
+        ? 1.0
+        : player.duration.inMilliseconds.toDouble();
+    final value = position.inMilliseconds
+        .clamp(0, max.toInt())
+        .toDouble();
+    final textColor = bright
+        ? Colors.white.withValues(alpha: .64)
+        : Theme.of(context).colorScheme.onSurfaceVariant;
+    // 高潮片段时间点（进度条小圆点），无高潮或无效时为空。
+    final climax = player.climax;
+    final climaxFraction = climax != null &&
+            climax.isValid &&
+            max > 0 &&
+            climax.startTime.inMilliseconds <= max.toInt()
+        ? climax.startTime.inMilliseconds / max
+        : null;
 
-        return Column(
-          children: [
-            LayoutBuilder(
-              builder: (context, constraints) {
-                final width = constraints.maxWidth;
-                final thumbRadius = compact ? 4.0 : 5.0;
-                final dotSize = compact ? 7.0 : 8.0;
-                return Stack(
-                  alignment: Alignment.centerLeft,
-                  children: [
-                    SliderTheme(
-                      data: SliderTheme.of(context).copyWith(
-                        trackHeight: compact ? 3 : 5,
-                        thumbShape: RoundSliderThumbShape(
-                          enabledThumbRadius: compact ? 4 : 5,
-                        ),
-                        overlayShape: RoundSliderOverlayShape(
-                          overlayRadius: compact ? 10 : 14,
-                        ),
-                        activeTrackColor: bright
-                            ? Colors.white.withValues(alpha: .86)
-                            : Theme.of(context).colorScheme.primary,
-                        inactiveTrackColor: bright
-                            ? Colors.white.withValues(alpha: .25)
-                            : Theme.of(context).colorScheme.surfaceContainerHighest,
-                        thumbColor: Colors.white,
-                      ),
-                      child: Slider(
-                        value: value,
-                        max: max,
-                        onChanged: (value) =>
-                            player.previewSeek(
-                                Duration(milliseconds: value.round())),
-                        onChangeEnd: (value) =>
-                            player.seek(Duration(milliseconds: value.round())),
-                      ),
+    return Column(
+      children: [
+        LayoutBuilder(
+          builder: (context, constraints) {
+            final width = constraints.maxWidth;
+            final thumbRadius = compact ? 4.0 : 5.0;
+            final dotSize = compact ? 7.0 : 8.0;
+            return Stack(
+              alignment: Alignment.centerLeft,
+              children: [
+                SliderTheme(
+                  data: SliderTheme.of(context).copyWith(
+                    trackHeight: compact ? 3 : 5,
+                    thumbShape: RoundSliderThumbShape(
+                      enabledThumbRadius: compact ? 4 : 5,
                     ),
-                    if (climaxFraction != null)
-                      Positioned(
-                        left: thumbRadius +
-                            climaxFraction * (width - 2 * thumbRadius) -
-                            dotSize / 2,
-                        top: 24 - dotSize / 2,
-                        child: IgnorePointer(
-                          child: Container(
-                            width: dotSize,
-                            height: dotSize,
-                            decoration: BoxDecoration(
-                              color: bright
-                                  ? Colors.white
-                                  : Theme.of(context).colorScheme.primary,
-                              shape: BoxShape.circle,
-                              border: Border.all(
-                                color: bright
-                                    ? Colors.black.withValues(alpha: .4)
-                                    : Colors.white,
-                                width: 1.2,
-                              ),
-                            ),
+                    overlayShape: RoundSliderOverlayShape(
+                      overlayRadius: compact ? 10 : 14,
+                    ),
+                    activeTrackColor: bright
+                        ? Colors.white.withValues(alpha: .86)
+                        : Theme.of(context).colorScheme.primary,
+                    inactiveTrackColor: bright
+                        ? Colors.white.withValues(alpha: .25)
+                        : Theme.of(context).colorScheme.surfaceContainerHighest,
+                    thumbColor: Colors.white,
+                  ),
+                  child: Slider(
+                    value: value,
+                    max: max,
+                    onChanged: (value) =>
+                        player.previewSeek(
+                            Duration(milliseconds: value.round())),
+                    onChangeEnd: (value) =>
+                        player.seek(Duration(milliseconds: value.round())),
+                  ),
+                ),
+                if (climaxFraction != null)
+                  Positioned(
+                    left: thumbRadius +
+                        climaxFraction * (width - 2 * thumbRadius) -
+                        dotSize / 2,
+                    top: 24 - dotSize / 2,
+                    child: IgnorePointer(
+                      child: Container(
+                        width: dotSize,
+                        height: dotSize,
+                        decoration: BoxDecoration(
+                          color: bright
+                              ? Colors.white
+                              : Theme.of(context).colorScheme.primary,
+                          shape: BoxShape.circle,
+                          border: Border.all(
+                            color: bright
+                                ? Colors.black.withValues(alpha: .4)
+                                : Colors.white,
+                            width: 1.2,
                           ),
                         ),
                       ),
-                  ],
-                );
-              },
-            ),
-            Padding(
-              padding: EdgeInsets.symmetric(horizontal: compact ? 2 : 4),
-              child: Row(
-                children: [
-                  Text(
-                    formatDuration(player.smoothPosition),
-                    style: TextStyle(
-                      color: textColor,
-                      fontSize: compact ? 12 : null,
                     ),
                   ),
-                  const Spacer(),
-                  Text(
-                    formatDuration(player.duration),
-                    style: TextStyle(
-                      color: textColor,
-                      fontSize: compact ? 12 : null,
-                    ),
-                  ),
-                ],
+              ],
+            );
+          },
+        ),
+        Padding(
+          padding: EdgeInsets.symmetric(horizontal: compact ? 2 : 4),
+          child: Row(
+            children: [
+              Text(
+                formatDuration(position),
+                style: TextStyle(
+                  color: textColor,
+                  fontSize: compact ? 12 : null,
+                ),
               ),
-            ),
-          ],
-        );
+              const Spacer(),
+              Text(
+                formatDuration(player.duration),
+                style: TextStyle(
+                  color: textColor,
+                  fontSize: compact ? 12 : null,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
       },
     );
   }

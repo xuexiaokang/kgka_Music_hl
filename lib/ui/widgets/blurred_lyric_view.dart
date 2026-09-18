@@ -179,14 +179,27 @@ class _BlurredLyricPainter extends LyricPainter {
     }
 
     final sigma = math.min(maxBlurSigma, blurStep * distance).toDouble();
-    if (sigma <= 0) {
+    // sigma 过小时逐帧离屏模糊的视觉收益可忽略，直接锐化绘制，
+    // 避免每个非当前行都创建离屏 layer（O(画布面积) 的填充成本）。
+    if (sigma < 0.02) {
       super.drawLine(canvas, metric, size, index, isInAnchorArea);
       return;
     }
-
     final blurPaint = Paint()
       ..imageFilter = ImageFilter.blur(sigmaX: sigma, sigmaY: sigma);
-    canvas.saveLayer(null, blurPaint);
+    // LyricPainter.paint 绘制到本行时 canvas 原点已被平移到该行内容顶部，
+    // saveLayer 只需包住本行文本（含翻译行）的矩形，而不是整块画布：
+    // 全屏离屏 layer 的成本是 O(画布面积)，行级 layer 是 O(行面积)，
+    // 视觉完全一致，但 GPU 填充/合成开销可降低一个数量级。
+    final pad = sigma * 2 + 4;
+    final rect = Rect.fromLTWH(
+      -pad,
+      -pad,
+      size.width + pad * 2,
+      metric.height + metric.translationHeight + style.translationLineGap +
+          pad * 2,
+    );
+    canvas.saveLayer(rect, blurPaint);
     super.drawLine(canvas, metric, size, index, isInAnchorArea);
     canvas.restore();
   }
