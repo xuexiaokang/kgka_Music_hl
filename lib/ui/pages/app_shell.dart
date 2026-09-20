@@ -897,10 +897,16 @@ class _CenterPlayerDiscState extends State<_CenterPlayerDisc>
                   alignment: Alignment.center,
                   children: [
                     // 1. 外圈环形播放进度条（仅显示已播放进度弧线）
-                    // 高频 position 独立订阅，避免整条底栏随进度重建
-                    ValueListenableBuilder<Duration>(
-                      valueListenable: widget.player.positionNotifier,
-                      builder: (context, position, _) {
+                    // 高频 position 独立订阅，避免整条底栏随进度重建；
+                    // 联合 player：暂停期间新歌 duration 解析完成也能刷新。
+                    ListenableBuilder(
+                      listenable: Listenable.merge([
+                        widget.player,
+                        widget.player.positionNotifier,
+                      ]),
+                      builder: (context, _) {
+                        final position =
+                            widget.player.positionNotifier.value;
                         final durationMs =
                             widget.player.duration.inMilliseconds;
                         final positionMs = position.inMilliseconds;

@@ -1424,20 +1424,9 @@ class _PosterPlayerPageState extends State<_PosterPlayerPage>
         final tiny = constraints.maxHeight < 460;
         final artworkMaxWidth = compact ? 250.0 : 330.0;
 
-        return Padding(
-          padding: const EdgeInsets.fromLTRB(28, 12, 28, 18),
-          child: Column(
-            children: [
-              // 唱片区弹性缩放：高度不足时唱片自动缩小，
-              // 底部控制按钮永远不会被挤出屏幕。
-              Expanded(
-                child: Center(
-                  child: FittedBox(
-                    fit: BoxFit.scaleDown,
-                    child: SizedBox.square(
-                      dimension: artworkMaxWidth,
-                      child: Hero(
-                        tag: 'player_cover',
+        // 旋转唱片盘（Hero 动画目标）
+        final record = Hero(
+          tag: 'player_cover',
                         child: RepaintBoundary(
                           child: RotationTransition(
                             turns: _rotationController,
@@ -1508,12 +1497,35 @@ class _PosterPlayerPageState extends State<_PosterPlayerPage>
                             ),
                           ),
                         ),
+                      );
+
+        return Padding(
+          padding: const EdgeInsets.fromLTRB(28, 12, 28, 18),
+          child: Column(
+            children: [
+              if (tiny) ...[
+                // 极矮横屏（某些分辨率）：唱片区弹性缩放，控制按钮永不被挤出
+                Expanded(
+                  child: Center(
+                    child: FittedBox(
+                      fit: BoxFit.scaleDown,
+                      child: SizedBox.square(
+                        dimension: artworkMaxWidth,
+                        child: record,
                       ),
                     ),
                   ),
                 ),
-              ),
-              if (!tiny) ...[
+              ] else ...[
+                // 常规竖屏/横屏：固定尺寸封面，上下弹性留白（还原上游布局）
+                const Spacer(),
+                ConstrainedBox(
+                  constraints: BoxConstraints(maxWidth: artworkMaxWidth),
+                  child: AspectRatio(
+                    aspectRatio: 1,
+                    child: record,
+                  ),
+                ),
                 SizedBox(height: compact ? 14 : 26),
                 _PosterLyricPreview(
                   player: widget.player,
@@ -1521,8 +1533,8 @@ class _PosterPlayerPageState extends State<_PosterPlayerPage>
                 ),
                 if (!compact) const SizedBox(height: 4),
                 _CommentEntry(player: widget.player, song: widget.song),
+                const Spacer(),
               ],
-              const Spacer(),
               _Progress(player: widget.player, bright: true),
               const SizedBox(height: 10),
               _Controls(
@@ -2388,9 +2400,12 @@ class _Progress extends StatelessWidget {
   Widget build(BuildContext context) {
     // 进度高频变化：仅订阅 positionNotifier 重建本组件，
     // 不依赖外层 AnimatedBuilder(player) 的全量广播。
-    return ValueListenableBuilder<Duration>(
-      valueListenable: player.positionNotifier,
-      builder: (context, position, _) {
+    // 联合监听 player：暂停状态下歌曲 load 完成时 duration/climax
+    // 异步解析完成后也能驱动重绘（暂停期间 positionNotifier 不派发）。
+    return ListenableBuilder(
+      listenable: Listenable.merge([player, player.positionNotifier]),
+      builder: (context, _) {
+    final position = player.positionNotifier.value;
     final max = player.duration.inMilliseconds <= 0
         ? 1.0
         : player.duration.inMilliseconds.toDouble();

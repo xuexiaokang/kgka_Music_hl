@@ -2210,6 +2210,7 @@ class PlayerController extends ChangeNotifier {
     _desktopLyrics.setVisibilityChangedHandler(null);
     unawaited(_audioHandler.close());
     unawaited(_desktopLyrics.hide());
+    positionNotifier.dispose();
     super.dispose();
   }
 
