@@ -401,64 +401,121 @@ String _lyricDisplayModeLabel(_LyricDisplayMode mode) {
   };
 }
 
-class _ArtworkBackground extends StatelessWidget {
-  // 本地实现为静态模糊背景（旋转动画在中央封面小图），无旋转动画需要暂停；
-  // isPaused 仅保留以兼容上游调用方（播放页翻页/滚动时传入）。
-  const _ArtworkBackground({required this.song, this.isPaused = false});
+class _ArtworkBackground extends StatefulWidget {
+  const _ArtworkBackground({
+    required this.song,
+    this.isPaused = false,
+  });
 
   final Song song;
   final bool isPaused;
 
   @override
+  State<_ArtworkBackground> createState() => _ArtworkBackgroundState();
+}
+
+class _ArtworkBackgroundState extends State<_ArtworkBackground>
+    with SingleTickerProviderStateMixin, WidgetsBindingObserver {
+  late final AnimationController _rotationController;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _rotationController = AnimationController(
+      vsync: this,
+      duration: const Duration(seconds: 40),
+    );
+    if (!widget.isPaused) {
+      _rotationController.repeat();
+    }
+  }
+
+  @override
+  void didUpdateWidget(covariant _ArtworkBackground oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.isPaused != widget.isPaused) {
+      if (widget.isPaused) {
+        if (_rotationController.isAnimating) _rotationController.stop();
+      } else {
+        if (!_rotationController.isAnimating) _rotationController.repeat();
+      }
+    }
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    super.didChangeAppLifecycleState(state);
+    if (state == AppLifecycleState.resumed) {
+      if (!widget.isPaused && !_rotationController.isAnimating) {
+        _rotationController.repeat();
+      }
+    } else {
+      if (_rotationController.isAnimating) _rotationController.stop();
+    }
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _rotationController.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final coverUrl = song.coverUrl;
+    final coverUrl = widget.song.coverUrl;
     final size = MediaQuery.sizeOf(context);
     final maxDim = math.max(size.width, size.height);
-    final bgDim = maxDim.clamp(300.0, 640.0);
+    final bgDim = maxDim.clamp(300.0, 900.0);
 
-    // 背景封面图静态模糊即可（旋转动画放到中央封面小图上，成本低得多），
-    // 避免播放期间每一帧都对整张大图重新做高斯模糊。
-    return ExcludeSemantics(
-      child: Stack(
-        fit: StackFit.expand,
-        children: [
-          // 始终显示渐变兜底背景，避免封面加载期间出现纯黑背景
-          const _FallbackBackground(),
-          if (coverUrl != null)
-            Center(
-              child: SizedBox(
-                width: bgDim,
-                height: bgDim,
-                child: RepaintBoundary(
-                  child: ImageFiltered(
-                    imageFilter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
-                    child: Image.network(
-                      coverUrl,
-                      fit: BoxFit.cover,
-                      cacheWidth: 360,
-                      cacheHeight: 360,
-                      errorBuilder: (context, error, stackTrace) =>
-                          const SizedBox.shrink(),
+    // 旋转动画背景是纯装饰性的，排除语义树防止 Windows AXTree 竞态崩溃，并用 RepaintBoundary 彻底隔离图层
+    return RepaintBoundary(
+      child: ExcludeSemantics(
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            // 始终显示渐变兜底背景，避免封面加载期间出现纯黑背景
+            const _FallbackBackground(),
+            if (coverUrl != null)
+              Center(
+                child: SizedBox(
+                  width: bgDim,
+                  height: bgDim,
+                  child: RotationTransition(
+                    turns: _rotationController,
+                    child: RepaintBoundary(
+                      child: ImageFiltered(
+                        imageFilter: ImageFilter.blur(sigmaX: 28, sigmaY: 28),
+                        child: Image.network(
+                          coverUrl,
+                          fit: BoxFit.cover,
+                          cacheWidth: 360,
+                          cacheHeight: 360,
+                          errorBuilder: (context, error, stackTrace) =>
+                              const SizedBox.shrink(),
+                        ),
+                      ),
                     ),
                   ),
                 ),
               ),
-            ),
-          DecoratedBox(
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                begin: Alignment.topCenter,
-                end: Alignment.bottomCenter,
-                colors: [
-                  Colors.black.withValues(alpha: .32),
-                  Colors.black.withValues(alpha: .56),
-                  Colors.black.withValues(alpha: .82),
-                ],
+            DecoratedBox(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  colors: [
+                    Colors.black.withValues(alpha: .32),
+                    Colors.black.withValues(alpha: .56),
+                    Colors.black.withValues(alpha: .82),
+                  ],
+                ),
               ),
             ),
-          ),
-          ColoredBox(color: Colors.black.withValues(alpha: .12)),
-        ],
+            ColoredBox(color: Colors.black.withValues(alpha: .12)),
+          ],
+        ),
       ),
     );
   }
@@ -1369,50 +1426,9 @@ class _PosterPlayerPage extends StatefulWidget {
 }
 
 class _PosterPlayerPageState extends State<_PosterPlayerPage>
-    with AutomaticKeepAliveClientMixin, SingleTickerProviderStateMixin {
+    with AutomaticKeepAliveClientMixin {
   @override
   bool get wantKeepAlive => true;
-
-  late final AnimationController _rotationController;
-
-  @override
-  void initState() {
-    super.initState();
-    _rotationController = AnimationController(
-      vsync: this,
-      duration: const Duration(seconds: 40),
-    );
-    widget.player.addListener(_syncRotation);
-    _syncRotation();
-  }
-
-  @override
-  void didUpdateWidget(covariant _PosterPlayerPage oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (oldWidget.song.hash != widget.song.hash) {
-      _rotationController.value = 0;
-    }
-    _syncRotation();
-  }
-
-  /// 中央封面旋转跟随播放状态：暂停即停转，避免白耗 GPU。
-  void _syncRotation() {
-    if (!mounted) return;
-    if (widget.player.isPlaying) {
-      if (!_rotationController.isAnimating) {
-        _rotationController.repeat();
-      }
-    } else if (_rotationController.isAnimating) {
-      _rotationController.stop(canceled: false);
-    }
-  }
-
-  @override
-  void dispose() {
-    widget.player.removeListener(_syncRotation);
-    _rotationController.dispose();
-    super.dispose();
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -1420,110 +1436,49 @@ class _PosterPlayerPageState extends State<_PosterPlayerPage>
     return LayoutBuilder(
       builder: (context, constraints) {
         final compact = constraints.maxHeight < 620;
-        // 极矮横屏（某些分辨率）下：隐藏歌词预览/评论入口，优先保证控制按钮可见
+        // 极矮横屏（某些分辨率）下：唱片区弹性缩放，控制按钮永不被挤出屏幕
         final tiny = constraints.maxHeight < 460;
         final artworkMaxWidth = compact ? 250.0 : 330.0;
-
-        // 旋转唱片盘（Hero 动画目标）
-        final record = Hero(
-          tag: 'player_cover',
-                        child: RepaintBoundary(
-                          child: RotationTransition(
-                            turns: _rotationController,
-                            child: Stack(
-                              alignment: Alignment.center,
-                              children: [
-                                // 圆形唱片盘体
-                                DecoratedBox(
-                                  decoration: BoxDecoration(
-                                    shape: BoxShape.circle,
-                                    gradient: RadialGradient(
-                                      colors: [
-                                        Colors.white.withValues(alpha: .88),
-                                        Colors.white.withValues(alpha: .58),
-                                        Colors.white.withValues(alpha: .22),
-                                      ],
-                                      stops: const [0, .62, 1],
-                                    ),
-                                    boxShadow: [
-                                      BoxShadow(
-                                        color: Colors.black.withValues(alpha: .26),
-                                        blurRadius: 30,
-                                        offset: const Offset(0, 18),
-                                      ),
-                                    ],
-                                  ),
-                                  child: const SizedBox.expand(),
-                                ),
-                                // 盘面同心环纹理
-                                for (final ratio in const [.36, .52, .68, .82])
-                                  FractionallySizedBox(
-                                    widthFactor: ratio,
-                                    heightFactor: ratio,
-                                    child: DecoratedBox(
-                                      decoration: BoxDecoration(
-                                        shape: BoxShape.circle,
-                                        border: Border.all(
-                                          color:
-                                              Colors.white.withValues(alpha: .16),
-                                        ),
-                                      ),
-                                    ),
-                                  ),
-                                // 中央圆形封面
-                                FractionallySizedBox(
-                                  widthFactor: .74,
-                                  heightFactor: .74,
-                                  child: ClipOval(
-                                    child: Artwork(
-                                      url: widget.song.coverUrl,
-                                      size: double.infinity,
-                                      borderRadius: 8,
-                                    ),
-                                  ),
-                                ),
-                                // 中心孔
-                                FractionallySizedBox(
-                                  widthFactor: .08,
-                                  heightFactor: .08,
-                                  child: DecoratedBox(
-                                    decoration: BoxDecoration(
-                                      shape: BoxShape.circle,
-                                      color: Colors.white.withValues(alpha: .82),
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
-                      );
 
         return Padding(
           padding: const EdgeInsets.fromLTRB(28, 12, 28, 18),
           child: Column(
             children: [
               if (tiny) ...[
-                // 极矮横屏（某些分辨率）：唱片区弹性缩放，控制按钮永不被挤出
+                // 高度不足时封面自动缩放，优先保证控制按钮完整可见
                 Expanded(
                   child: Center(
                     child: FittedBox(
                       fit: BoxFit.scaleDown,
                       child: SizedBox.square(
                         dimension: artworkMaxWidth,
-                        child: record,
+                        child: Hero(
+                          tag: 'player_cover',
+                          child: Artwork(
+                            url: widget.song.coverUrl,
+                            size: double.infinity,
+                            borderRadius: 8,
+                          ),
+                        ),
                       ),
                     ),
                   ),
                 ),
               ] else ...[
-                // 常规竖屏/横屏：固定尺寸封面，上下弹性留白（还原上游布局）
+                // 常规竖屏/横屏：保持原有固定尺寸布局
                 const Spacer(),
                 ConstrainedBox(
                   constraints: BoxConstraints(maxWidth: artworkMaxWidth),
                   child: AspectRatio(
                     aspectRatio: 1,
-                    child: record,
+                    child: Hero(
+                      tag: 'player_cover',
+                      child: Artwork(
+                        url: widget.song.coverUrl,
+                        size: double.infinity,
+                        borderRadius: 8,
+                      ),
+                    ),
                   ),
                 ),
                 SizedBox(height: compact ? 14 : 26),
