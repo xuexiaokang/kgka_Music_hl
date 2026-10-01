@@ -838,23 +838,19 @@ class _LandscapeArtworkShowcaseState extends State<_LandscapeArtworkShowcase>
           final coverSize = discSize * (widget.compact ? .58 : .70);
 
           return Center(
-            // 旋转唱片是纯装饰动画，排除语义树防止 Windows AXTree 竞态崩溃，并外包 RepaintBoundary 隔离图层
-            child: RepaintBoundary(
-              child: ExcludeSemantics(
-                child: SizedBox.square(
+            // 车机/横屏唱片机：投影底盘与旋转盘面分层缓存。
+            // 旧写法 RepaintBoundary 包在 Transform.rotate 之外，导致 blurRadius:30 阴影
+            // 与 ClipOval 封面每帧重新栅格化，车机弱 GPU 上是全屏卡顿主因。
+            // 现在：底盘(径向渐变+投影)静态、独立 RepaintBoundary 只画一次；
+            // 盘面(纹路+封面+中心点)内容用 RepaintBoundary 缓存，每帧只改变旋转 matrix。
+            child: ExcludeSemantics(
+              child: SizedBox.square(
                 dimension: discSize,
-                child: AnimatedBuilder(
-                  animation: _rotationController,
-                  builder: (context, child) {
-                    return Transform.rotate(
-                      angle: _rotationController.value * math.pi * 2,
-                      child: child,
-                    );
-                  },
-                  child: Stack(
-                    alignment: Alignment.center,
-                    children: [
-                      DecoratedBox(
+                child: Stack(
+                  alignment: Alignment.center,
+                  children: [
+                    RepaintBoundary(
+                      child: DecoratedBox(
                         decoration: BoxDecoration(
                           shape: BoxShape.circle,
                           gradient: RadialGradient(
@@ -873,43 +869,58 @@ class _LandscapeArtworkShowcaseState extends State<_LandscapeArtworkShowcase>
                             ),
                           ],
                         ),
-                        child: const SizedBox.expand(),
+                        child: SizedBox.square(dimension: discSize),
                       ),
-                      for (final ratio in const [.36, .52, .68, .82])
-                        SizedBox.square(
-                          dimension: discSize * ratio,
-                          child: DecoratedBox(
-                            decoration: BoxDecoration(
-                              shape: BoxShape.circle,
-                              border: Border.all(
-                                color: Colors.white.withValues(alpha: .16),
+                    ),
+                    AnimatedBuilder(
+                      animation: _rotationController,
+                      builder: (context, child) {
+                        return Transform.rotate(
+                          angle: _rotationController.value * math.pi * 2,
+                          child: child,
+                        );
+                      },
+                      child: RepaintBoundary(
+                        child: Stack(
+                          alignment: Alignment.center,
+                          children: [
+                            for (final ratio in const [.36, .52, .68, .82])
+                              SizedBox.square(
+                                dimension: discSize * ratio,
+                                child: DecoratedBox(
+                                  decoration: BoxDecoration(
+                                    shape: BoxShape.circle,
+                                    border: Border.all(
+                                      color: Colors.white.withValues(alpha: .16),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ClipOval(
+                              child: Artwork(
+                                url: widget.song.coverUrl,
+                                size: coverSize,
+                                borderRadius: coverSize,
                               ),
                             ),
-                          ),
-                        ),
-                      ClipOval(
-                        child: Artwork(
-                          url: widget.song.coverUrl,
-                          size: coverSize,
-                          borderRadius: coverSize,
-                        ),
-                      ),
-                      SizedBox.square(
-                        dimension: discSize * .08,
-                        child: DecoratedBox(
-                          decoration: BoxDecoration(
-                            shape: BoxShape.circle,
-                            color: Colors.white.withValues(alpha: .82),
-                          ),
+                            SizedBox.square(
+                              dimension: discSize * .08,
+                              child: DecoratedBox(
+                                decoration: BoxDecoration(
+                                  shape: BoxShape.circle,
+                                  color: Colors.white.withValues(alpha: .82),
+                                ),
+                              ),
+                            ),
+                          ],
                         ),
                       ),
-                    ],
-                  ),
+                    ),
+                  ],
                 ),
               ),
             ),
-          ),
-        );
+          );
         },
       ),
     );
@@ -1138,7 +1149,8 @@ class _LandscapeLyricPanelState extends State<_LandscapeLyricPanel> {
     final fontSize = widget.compact ? 26.0 : 34.0;
     final inactiveFontSize = widget.compact ? 18.0 : 24.0;
 
-    return ExcludeSemantics(
+    return RepaintBoundary(
+      child: ExcludeSemantics(
       // 歌词视图高频更新会触发 Windows AXTree 竞态崩溃，排除语义树
       child: LyricView(
         controller: _lyricController,
@@ -1165,6 +1177,7 @@ class _LandscapeLyricPanelState extends State<_LandscapeLyricPanel> {
           contentAlignment: CrossAxisAlignment.start,
           activeHighlightColor: Colors.white,
         ),
+      ),
       ),
     );
   }
