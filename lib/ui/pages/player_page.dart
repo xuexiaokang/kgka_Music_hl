@@ -239,7 +239,6 @@ class _PlayerBodyState extends State<_PlayerBody> {
             children: [
               _ArtworkBackground(
                 song: widget.song,
-                isPaused: _page == 1 && !_pageScrolling,
               ),
             SafeArea(
               // 横屏时同样需要处理顶部状态栏和底部系统导航栏（如车机空调控制栏）的遮挡。
@@ -401,75 +400,21 @@ String _lyricDisplayModeLabel(_LyricDisplayMode mode) {
   };
 }
 
-class _ArtworkBackground extends StatefulWidget {
-  const _ArtworkBackground({
-    required this.song,
-    this.isPaused = false,
-  });
+class _ArtworkBackground extends StatelessWidget {
+  const _ArtworkBackground({required this.song});
 
   final Song song;
-  final bool isPaused;
-
-  @override
-  State<_ArtworkBackground> createState() => _ArtworkBackgroundState();
-}
-
-class _ArtworkBackgroundState extends State<_ArtworkBackground>
-    with SingleTickerProviderStateMixin, WidgetsBindingObserver {
-  late final AnimationController _rotationController;
-
-  @override
-  void initState() {
-    super.initState();
-    WidgetsBinding.instance.addObserver(this);
-    _rotationController = AnimationController(
-      vsync: this,
-      duration: const Duration(seconds: 40),
-    );
-    if (!widget.isPaused) {
-      _rotationController.repeat();
-    }
-  }
-
-  @override
-  void didUpdateWidget(covariant _ArtworkBackground oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (oldWidget.isPaused != widget.isPaused) {
-      if (widget.isPaused) {
-        if (_rotationController.isAnimating) _rotationController.stop();
-      } else {
-        if (!_rotationController.isAnimating) _rotationController.repeat();
-      }
-    }
-  }
-
-  @override
-  void didChangeAppLifecycleState(AppLifecycleState state) {
-    super.didChangeAppLifecycleState(state);
-    if (state == AppLifecycleState.resumed) {
-      if (!widget.isPaused && !_rotationController.isAnimating) {
-        _rotationController.repeat();
-      }
-    } else {
-      if (_rotationController.isAnimating) _rotationController.stop();
-    }
-  }
-
-  @override
-  void dispose() {
-    WidgetsBinding.instance.removeObserver(this);
-    _rotationController.dispose();
-    super.dispose();
-  }
 
   @override
   Widget build(BuildContext context) {
-    final coverUrl = widget.song.coverUrl;
+    final coverUrl = song.coverUrl;
     final size = MediaQuery.sizeOf(context);
     final maxDim = math.max(size.width, size.height);
     final bgDim = maxDim.clamp(300.0, 900.0);
 
-    // 旋转动画背景是纯装饰性的，排除语义树防止 Windows AXTree 竞态崩溃，并用 RepaintBoundary 彻底隔离图层
+    // 模糊背景静态化：封面只随加载做一次 sigma28 高斯模糊，RepaintBoundary 缓存为静态图层。
+    // 此前它套在 40s RotationTransition 里，旋转每帧(60fps)逼着全屏高斯模糊重算，是竖屏播放卡顿/高占用的主因。
+    // 排除语义树防止 Windows AXTree 竞态崩溃；去掉旋转后父级 rebuild 也不会再重绘这层模糊。
     return RepaintBoundary(
       child: ExcludeSemantics(
         child: Stack(
@@ -482,20 +427,15 @@ class _ArtworkBackgroundState extends State<_ArtworkBackground>
                 child: SizedBox(
                   width: bgDim,
                   height: bgDim,
-                  child: RotationTransition(
-                    turns: _rotationController,
-                    child: RepaintBoundary(
-                      child: ImageFiltered(
-                        imageFilter: ImageFilter.blur(sigmaX: 28, sigmaY: 28),
-                        child: Image.network(
-                          coverUrl,
-                          fit: BoxFit.cover,
-                          cacheWidth: 360,
-                          cacheHeight: 360,
-                          errorBuilder: (context, error, stackTrace) =>
-                              const SizedBox.shrink(),
-                        ),
-                      ),
+                  child: ImageFiltered(
+                    imageFilter: ImageFilter.blur(sigmaX: 28, sigmaY: 28),
+                    child: Image.network(
+                      coverUrl,
+                      fit: BoxFit.cover,
+                      cacheWidth: 360,
+                      cacheHeight: 360,
+                      errorBuilder: (context, error, stackTrace) =>
+                          const SizedBox.shrink(),
                     ),
                   ),
                 ),
