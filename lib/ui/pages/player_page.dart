@@ -239,6 +239,8 @@ class _PlayerBodyState extends State<_PlayerBody> {
             children: [
               _ArtworkBackground(
                 song: widget.song,
+                isPaused: _page == 1 && !_pageScrolling,
+                car: isCarLayout,
               ),
             SafeArea(
               // 横屏时同样需要处理顶部状态栏和底部系统导航栏（如车机空调控制栏）的遮挡。
@@ -400,21 +402,110 @@ String _lyricDisplayModeLabel(_LyricDisplayMode mode) {
   };
 }
 
-class _ArtworkBackground extends StatelessWidget {
-  const _ArtworkBackground({required this.song});
+class _ArtworkBackground extends StatefulWidget {
+  const _ArtworkBackground({
+    required this.song,
+    this.isPaused = false,
+    this.car = false,
+  });
 
   final Song song;
+  final bool isPaused;
+
+  /// 车机标志：车机全屏走横屏布局、SoC 较弱，每帧旋转会逼着全屏 sigma28 高斯模糊重算，
+  /// 因此仅车机模式让背景静态化；非车机（竖屏）保持原有 40s 缓慢旋转装饰，行为不变。
+  final bool car;
+
+  @override
+  State<_ArtworkBackground> createState() => _ArtworkBackgroundState();
+}
+
+class _ArtworkBackgroundState extends State<_ArtworkBackground>
+    with SingleTickerProviderStateMixin, WidgetsBindingObserver {
+  late final AnimationController _rotationController;
+
+  bool get _shouldRotate => !widget.car;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _rotationController = AnimationController(
+      vsync: this,
+      duration: const Duration(seconds: 40),
+    );
+    if (_shouldRotate && !widget.isPaused) {
+      _rotationController.repeat();
+    }
+  }
+
+  @override
+  void didUpdateWidget(covariant _ArtworkBackground oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.car != widget.car) {
+      // 进入车机：停转保持静态；退出车机：按需恢复旋转
+      if (widget.car) {
+        if (_rotationController.isAnimating) _rotationController.stop();
+      } else if (!widget.isPaused && !_rotationController.isAnimating) {
+        _rotationController.repeat();
+      }
+      return;
+    }
+    if (!_shouldRotate) return;
+    if (oldWidget.isPaused != widget.isPaused) {
+      if (widget.isPaused) {
+        if (_rotationController.isAnimating) _rotationController.stop();
+      } else {
+        if (!_rotationController.isAnimating) _rotationController.repeat();
+      }
+    }
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    super.didChangeAppLifecycleState(state);
+    if (!_shouldRotate) return;
+    if (state == AppLifecycleState.resumed) {
+      if (!widget.isPaused && !_rotationController.isAnimating) {
+        _rotationController.repeat();
+      }
+    } else {
+      if (_rotationController.isAnimating) _rotationController.stop();
+    }
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _rotationController.dispose();
+    super.dispose();
+  }
+
+  Widget _blurredCover(String url) {
+    return RepaintBoundary(
+      child: ImageFiltered(
+        imageFilter: ImageFilter.blur(sigmaX: 28, sigmaY: 28),
+        child: Image.network(
+          url,
+          fit: BoxFit.cover,
+          cacheWidth: 360,
+          cacheHeight: 360,
+          errorBuilder: (context, error, stackTrace) =>
+              const SizedBox.shrink(),
+        ),
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
-    final coverUrl = song.coverUrl;
+    final coverUrl = widget.song.coverUrl;
     final size = MediaQuery.sizeOf(context);
     final maxDim = math.max(size.width, size.height);
     final bgDim = maxDim.clamp(300.0, 900.0);
 
-    // 模糊背景静态化：封面只随加载做一次 sigma28 高斯模糊，RepaintBoundary 缓存为静态图层。
-    // 此前它套在 40s RotationTransition 里，旋转每帧(60fps)逼着全屏高斯模糊重算，是竖屏播放卡顿/高占用的主因。
-    // 排除语义树防止 Windows AXTree 竞态崩溃；去掉旋转后父级 rebuild 也不会再重绘这层模糊。
+    // 全屏模糊背景是纯装饰层，排除语义树防止 Windows AXTree 竞态崩溃，并用 RepaintBoundary 隔离图层。
+    // 车机(car=true)：模糊只随封面加载算一次(静态)；非车机竖屏：包在 RotationTransition 内保持原旋转。
     return RepaintBoundary(
       child: ExcludeSemantics(
         child: Stack(
@@ -427,17 +518,12 @@ class _ArtworkBackground extends StatelessWidget {
                 child: SizedBox(
                   width: bgDim,
                   height: bgDim,
-                  child: ImageFiltered(
-                    imageFilter: ImageFilter.blur(sigmaX: 28, sigmaY: 28),
-                    child: Image.network(
-                      coverUrl,
-                      fit: BoxFit.cover,
-                      cacheWidth: 360,
-                      cacheHeight: 360,
-                      errorBuilder: (context, error, stackTrace) =>
-                          const SizedBox.shrink(),
-                    ),
-                  ),
+                  child: _shouldRotate
+                      ? RotationTransition(
+                          turns: _rotationController,
+                          child: _blurredCover(coverUrl),
+                        )
+                      : _blurredCover(coverUrl),
                 ),
               ),
             DecoratedBox(
