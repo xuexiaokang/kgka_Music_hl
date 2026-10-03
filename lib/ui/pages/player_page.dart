@@ -894,11 +894,8 @@ class _LandscapeArtworkShowcaseState extends State<_LandscapeArtworkShowcase>
   }
 
   void _syncRotation() {
-    if (widget.player.isPlaying) {
-      if (!_rotationController.isAnimating) {
-        _rotationController.repeat();
-      }
-    } else if (_rotationController.isAnimating) {
+    // C: 车机静态盘面——不旋转，消除每帧动画 Ticker。
+    if (_rotationController.isAnimating) {
       _rotationController.stop(canceled: false);
     }
   }
@@ -1114,7 +1111,7 @@ class _LandscapeLyricPanel extends StatefulWidget {
 
 class _LandscapeLyricPanelState extends State<_LandscapeLyricPanel> {
   late final LyricController _lyricController;
-  late final Ticker _ticker;
+  Timer? _progressTimer;
   bool _isUserSelecting = false;
   /// 已加载歌词的快照：用于区分"歌词为空但准备中"与"歌词为空且加载完成"。
   List<LyricLine> _loadedLyrics = const [];
@@ -1136,7 +1133,7 @@ class _LandscapeLyricPanelState extends State<_LandscapeLyricPanel> {
     // 必须由本组件自己监听 player，否则歌词会一直卡在"正在准备音乐..."。
     widget.player.addListener(_onPlayerChanged);
     _syncLyrics();
-    _ticker = Ticker(_onTick);
+
     _syncTicker();
   }
 
@@ -1159,7 +1156,7 @@ class _LandscapeLyricPanelState extends State<_LandscapeLyricPanel> {
   void dispose() {
     widget.player.removeListener(_onPlayerChanged);
     _lyricController.isSelectingNotifier.removeListener(_onSelectingChanged);
-    _ticker.dispose();
+    _progressTimer?.cancel();
     _lyricController.dispose();
     super.dispose();
   }
@@ -1201,14 +1198,19 @@ class _LandscapeLyricPanelState extends State<_LandscapeLyricPanel> {
         _loadedLyrics.isNotEmpty &&
         !widget.player.isScrubbing &&
         !_isUserSelecting;
-    if (shouldTick && !_ticker.isActive) {
-      _ticker.start();
-    } else if (!shouldTick && _ticker.isActive) {
-      _ticker.stop();
+    if (shouldTick && _progressTimer == null) {
+      // B: 500ms Timer替代 60fps Ticker，消除每帧重绘。
+      _progressTimer = Timer.periodic(
+        const Duration(milliseconds: 500),
+        (_) => _onTick(),
+      );
+    } else if (!shouldTick && _progressTimer != null) {
+      _progressTimer?.cancel();
+      _progressTimer = null;
     }
   }
 
-  void _onTick(Duration elapsed) {
+  void _onTick() {
     if (!mounted || widget.player.isScrubbing) {
       return;
     }
@@ -1261,7 +1263,7 @@ class _LandscapeLyricPanelState extends State<_LandscapeLyricPanel> {
           fadeRange: FadeRange(top: 40, bottom: 40),
           textAlign: TextAlign.left,
           contentAlignment: CrossAxisAlignment.start,
-          activeHighlightColor: Colors.white,
+          activeHighlightColor: null, // A: 消除 per-frame shader
         ),
       ),
       ),
