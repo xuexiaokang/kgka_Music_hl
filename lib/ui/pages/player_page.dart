@@ -496,7 +496,7 @@ class _ArtworkBackgroundState extends State<_ArtworkBackground> {
         ..imageFilter = ui.ImageFilter.blur(
           sigmaX: _blurSigma,
           sigmaY: _blurSigma,
-          borderStyle: BorderStyle.mirror,
+          tileMode: ui.TileMode.mirror,
         );
       // 绘制时四周外扩一点，让模糊边缘落在裁剪区之外，避免边缘发虚露白。
       final margin = _blurSigma * 2.0;
