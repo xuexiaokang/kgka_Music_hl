@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
 import 'dart:ui';
+import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -414,62 +415,117 @@ class _ArtworkBackground extends StatefulWidget {
   State<_ArtworkBackground> createState() => _ArtworkBackgroundState();
 }
 
-class _ArtworkBackgroundState extends State<_ArtworkBackground>
-    with SingleTickerProviderStateMixin, WidgetsBindingObserver {
-  late final AnimationController _rotationController;
+class _ArtworkBackgroundState extends State<_ArtworkBackground> {
+  // 酷我纪律①：重活挪出渲染循环。背景模糊每个封面只算 1 次，缓存成静态低分纹理，
+  // 之后不再参与任何动画。旧实现把 ImageFiltered 套在 RotationTransition 里，
+  // 旋转每帧都可能重算全屏模糊 —— 这是平板/车机全屏卡顿的根因。
+  // 酷我的 v_mask_gb 背景本就是静态 ImageView，只有唱片在转（GPU 变换）。
+  static const double _blurSigma = 24.0;
+  static const int _tilePx = 200; // 低分辨率模糊瓦片：解码/模糊都极便宜，且模糊后细节本就不可见
+
+  ui.Image? _blurredCover;
+  int _requestId = 0;
 
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addObserver(this);
-    _rotationController = AnimationController(
-      vsync: this,
-      duration: const Duration(seconds: 40),
-    );
-    if (!widget.isPaused) {
-      _rotationController.repeat();
-    }
+    _regenerate(widget.song.coverUrl);
   }
 
   @override
   void didUpdateWidget(covariant _ArtworkBackground oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.isPaused != widget.isPaused) {
-      if (widget.isPaused) {
-        if (_rotationController.isAnimating) _rotationController.stop();
-      } else {
-        if (!_rotationController.isAnimating) _rotationController.repeat();
-      }
-    }
-  }
-
-  @override
-  void didChangeAppLifecycleState(AppLifecycleState state) {
-    super.didChangeAppLifecycleState(state);
-    if (state == AppLifecycleState.resumed) {
-      if (!widget.isPaused && !_rotationController.isAnimating) {
-        _rotationController.repeat();
-      }
-    } else {
-      if (_rotationController.isAnimating) _rotationController.stop();
+    if (oldWidget.song.coverUrl != widget.song.coverUrl) {
+      _regenerate(widget.song.coverUrl);
     }
   }
 
   @override
   void dispose() {
-    WidgetsBinding.instance.removeObserver(this);
-    _rotationController.dispose();
+    _blurredCover?.dispose();
     super.dispose();
+  }
+
+  void _regenerate(String? url) {
+    final reqId = ++_requestId;
+    if (url == null || url.isEmpty) {
+      _applyImage(null, reqId);
+      return;
+    }
+    unawaited(_buildBlurred(url, reqId));
+  }
+
+  Future<void> _buildBlurred(String url, int reqId) async {
+    ui.Image? out;
+    try {
+      out = await _blurNetworkImage(url);
+    } catch (_) {
+      out = null; // 网络/解码失败时回退到渐变背景，不阻塞页面
+    }
+    _applyImage(out, reqId);
+  }
+
+  void _applyImage(ui.Image? image, int reqId) {
+    if (!mounted || reqId != _requestId) {
+      image?.dispose();
+      return;
+    }
+    setState(() {
+      _blurredCover?.dispose();
+      _blurredCover = image;
+    });
+  }
+
+  /// 解码封面（低分辨率）→ 一次性模糊 → 导出静态 [ui.Image]。
+  Future<ui.Image> _blurNetworkImage(String url) async {
+    final data = await NetworkAssetBundle(Uri.parse(url)).load(url);
+    final bytes = data.buffer.asUint8List();
+    final codec = await ui.instantiateImageCodec(
+      bytes,
+      targetWidth: _tilePx,
+      targetHeight: _tilePx,
+    );
+    final frame = await codec.getNextFrame();
+    final src = frame.image;
+    codec.dispose();
+    try {
+      final recorder = ui.PictureRecorder();
+      final canvas = Canvas(recorder);
+      final paint = Paint()
+        ..filterQuality = FilterQuality.low
+        ..imageFilter = ui.ImageFilter.blur(
+          sigmaX: _blurSigma,
+          sigmaY: _blurSigma,
+          borderStyle: BorderStyle.mirror,
+        );
+      // 绘制时四周外扩一点，让模糊边缘落在裁剪区之外，避免边缘发虚露白。
+      final margin = _blurSigma * 2.0;
+      final dst = Rect.fromLTRB(
+        -margin,
+        -margin,
+        _tilePx + margin,
+        _tilePx + margin,
+      );
+      final srcRect = Rect.fromLTWH(
+        0,
+        0,
+        src.width.toDouble(),
+        src.height.toDouble(),
+      );
+      canvas.drawImageRect(src, srcRect, dst, paint);
+      final picture = recorder.endRecording();
+      final blurred = picture.toImageSync(_tilePx, _tilePx);
+      picture.dispose();
+      return blurred;
+    } finally {
+      src.dispose();
+    }
   }
 
   @override
   Widget build(BuildContext context) {
-    final coverUrl = widget.song.coverUrl;
-    final size = MediaQuery.sizeOf(context);
-    final maxDim = math.max(size.width, size.height);
-    final bgDim = maxDim.clamp(300.0, 900.0);
-
-    // 旋转动画背景是纯装饰性的，排除语义树防止 Windows AXTree 竞态崩溃，并用 RepaintBoundary 彻底隔离图层
+    // 纯装饰性背景，排除语义树防 Windows AXTree 竞态崩溃；RepaintBoundary 隔离静态模糊纹理层，
+    // 上层歌词/控制组件的重绘不会再触发这里重新解码或模糊。
     return RepaintBoundary(
       child: ExcludeSemantics(
         child: Stack(
@@ -477,29 +533,8 @@ class _ArtworkBackgroundState extends State<_ArtworkBackground>
           children: [
             // 始终显示渐变兜底背景，避免封面加载期间出现纯黑背景
             const _FallbackBackground(),
-            if (coverUrl != null)
-              Center(
-                child: SizedBox(
-                  width: bgDim,
-                  height: bgDim,
-                  child: RotationTransition(
-                    turns: _rotationController,
-                    child: RepaintBoundary(
-                      child: ImageFiltered(
-                        imageFilter: ImageFilter.blur(sigmaX: 28, sigmaY: 28),
-                        child: Image.network(
-                          coverUrl,
-                          fit: BoxFit.cover,
-                          cacheWidth: 360,
-                          cacheHeight: 360,
-                          errorBuilder: (context, error, stackTrace) =>
-                              const SizedBox.shrink(),
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-              ),
+            if (_blurredCover != null)
+              RawImage(image: _blurredCover, fit: BoxFit.cover),
             DecoratedBox(
               decoration: BoxDecoration(
                 gradient: LinearGradient(
@@ -897,79 +932,81 @@ class _LandscapeArtworkShowcaseState extends State<_LandscapeArtworkShowcase>
               .toDouble();
           final coverSize = discSize * (widget.compact ? .58 : .70);
 
-          return Center(
-            // 旋转唱片是纯装饰动画，排除语义树防止 Windows AXTree 竞态崩溃，并外包 RepaintBoundary 隔离图层
-            child: RepaintBoundary(
-              child: ExcludeSemantics(
-                child: SizedBox.square(
-                dimension: discSize,
-                child: AnimatedBuilder(
-                  animation: _rotationController,
-                  builder: (context, child) {
-                    return Transform.rotate(
-                      angle: _rotationController.value * math.pi * 2,
-                      child: child,
-                    );
-                  },
-                  child: Stack(
-                    alignment: Alignment.center,
-                    children: [
-                      DecoratedBox(
-                        decoration: BoxDecoration(
-                          shape: BoxShape.circle,
-                          gradient: RadialGradient(
-                            colors: [
-                              Colors.white.withValues(alpha: .88),
-                              Colors.white.withValues(alpha: .58),
-                              Colors.white.withValues(alpha: .22),
-                            ],
-                            stops: const [0, .62, 1],
-                          ),
-                          boxShadow: [
-                            BoxShadow(
-                              color: Colors.black.withValues(alpha: .26),
-                              blurRadius: 30,
-                              offset: const Offset(0, 18),
-                            ),
-                          ],
-                        ),
-                        child: const SizedBox.expand(),
-                      ),
-                      for (final ratio in const [.36, .52, .68, .82])
-                        SizedBox.square(
-                          dimension: discSize * ratio,
-                          child: DecoratedBox(
-                            decoration: BoxDecoration(
-                              shape: BoxShape.circle,
-                              border: Border.all(
-                                color: Colors.white.withValues(alpha: .16),
-                              ),
-                            ),
-                          ),
-                        ),
-                      ClipOval(
-                        child: Artwork(
-                          url: widget.song.coverUrl,
-                          size: coverSize,
-                          borderRadius: coverSize,
-                        ),
-                      ),
-                      SizedBox.square(
-                        dimension: discSize * .08,
-                        child: DecoratedBox(
-                          decoration: BoxDecoration(
-                            shape: BoxShape.circle,
-                            color: Colors.white.withValues(alpha: .82),
-                          ),
-                        ),
+          // 被旋转的唱片内容是静态的，用 RepaintBoundary 把它缓存成独立光栅层；
+          // Transform.rotate 作用在这层之上，每帧只更新变换矩阵（GPU），不重绘内容。
+          // 与酷我 setRotation 对 RenderNode 做变换、不触发 onDraw 同理。
+          final discContent = ExcludeSemantics(
+            child: Stack(
+              alignment: Alignment.center,
+              children: [
+                DecoratedBox(
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    gradient: RadialGradient(
+                      colors: [
+                        Colors.white.withValues(alpha: .88),
+                        Colors.white.withValues(alpha: .58),
+                        Colors.white.withValues(alpha: .22),
+                      ],
+                      stops: const [0, .62, 1],
+                    ),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withValues(alpha: .26),
+                        blurRadius: 30,
+                        offset: const Offset(0, 18),
                       ),
                     ],
                   ),
+                  child: const SizedBox.expand(),
                 ),
+                for (final ratio in const [.36, .52, .68, .82])
+                  SizedBox.square(
+                    dimension: discSize * ratio,
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        border: Border.all(
+                          color: Colors.white.withValues(alpha: .16),
+                        ),
+                      ),
+                    ),
+                  ),
+                ClipOval(
+                  child: Artwork(
+                    url: widget.song.coverUrl,
+                    size: coverSize,
+                    borderRadius: coverSize,
+                  ),
+                ),
+                SizedBox.square(
+                  dimension: discSize * .08,
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: Colors.white.withValues(alpha: .82),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          );
+
+          return Center(
+            child: SizedBox.square(
+              dimension: discSize,
+              child: AnimatedBuilder(
+                animation: _rotationController,
+                builder: (context, child) {
+                  return Transform.rotate(
+                    angle: _rotationController.value * math.pi * 2,
+                    child: child,
+                  );
+                },
+                child: RepaintBoundary(child: discContent),
               ),
             ),
-          ),
-        );
+          );
         },
       ),
     );
