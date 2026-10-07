@@ -12,6 +12,11 @@ on:
     tags:
       - 'v*'
   workflow_dispatch:
+    inputs:
+      build_profile:
+        description: 'Also build a --profile APK (for Flutter frame/jank profiling)'
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -93,6 +98,26 @@ jobs:
         with:
           name: kgka-music-apk
           path: build/app/outputs/flutter-apk/app-release.apk
+          retention-days: 30
+
+      # 仅手动触发且勾选 build_profile 时执行：产出 --profile APK，
+      # profile 模式性能接近 release，但保留 Dart VM Service timeline，
+      # 可用 adb forward + JSON-RPC getVMTimeline 拿到每帧 UI/Raster 线程耗时。
+      - name: Build APK (profile)
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.build_profile }}
+        run: |
+          flutter build apk --profile || {
+            echo "⚠️ 首次 profile 构建失败（可能为 JitPack 懒构建中），等待 90s 后重试…"
+            sleep 90
+            flutter build apk --profile
+          }
+
+      - name: Upload profile APK as Artifact
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.build_profile }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: kgka-music-apk-profile
+          path: build/app/outputs/flutter-apk/app-profile.apk
           retention-days: 30
 
       - name: Extract tag message
