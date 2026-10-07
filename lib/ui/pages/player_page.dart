@@ -1257,7 +1257,10 @@ class _LandscapeLyricPanelState extends State<_LandscapeLyricPanel> {
             horizontal: 24,
             vertical: widget.compact ? 20 : 40,
           ),
-          fadeRange: FadeRange(top: 40, bottom: 40),
+          // fadeRange=null：关掉 flutter_lyric 的整屏 ShaderMask(dstIn 离屏混合)，
+          // 每帧省一次全屏离屏合成。渐隐靠非当前行文字 alpha(.34) 已足够，
+          // 与原生酷我不pay整屏mask的渲染纪律对齐。
+          fadeRange: null,
           textAlign: TextAlign.left,
           contentAlignment: CrossAxisAlignment.start,
           activeHighlightColor: Colors.white,
@@ -2171,7 +2174,8 @@ class _LyricViewportState extends State<_LyricViewport> {
       ),
       anchorPosition: _lyricAnchorFraction,
       activeAnchorPosition: _lyricAnchorFraction,
-      fadeRange: FadeRange(top: 40, bottom: 40),
+      // fadeRange=null：关掉 wrapMaskIfNeed 的整屏 ShaderMask 离屏混合，每帧省一次全屏合成。
+      fadeRange: null,
       textAlign: TextAlign.left,
       contentAlignment: CrossAxisAlignment.start,
       activeHighlightColor: Colors.white,
