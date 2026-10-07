@@ -1112,9 +1112,15 @@ class _LandscapeLyricPanel extends StatefulWidget {
   State<_LandscapeLyricPanel> createState() => _LandscapeLyricPanelState();
 }
 
+/// 歌词逐字进度刷新节流间隔（毫秒）。~25fps 对卡拉OK滚动肉眼无感，
+/// 但把 flutter_lyric 每帧重绘整块歌词区 + 当前行两次 saveLayer 的开销降到 1/2.4，
+/// 在车机弱 GPU 上把渲染时间让给并发运行的其它 App（如浮窗视频）。
+const int _kLyricTickIntervalMs = 40;
+
 class _LandscapeLyricPanelState extends State<_LandscapeLyricPanel> {
   late final LyricController _lyricController;
   late final Ticker _ticker;
+  int _lastProgressMs = -1 << 40;
   bool _isUserSelecting = false;
   /// 已加载歌词的快照：用于区分"歌词为空但准备中"与"歌词为空且加载完成"。
   List<LyricLine> _loadedLyrics = const [];
@@ -1202,6 +1208,7 @@ class _LandscapeLyricPanelState extends State<_LandscapeLyricPanel> {
         !widget.player.isScrubbing &&
         !_isUserSelecting;
     if (shouldTick && !_ticker.isActive) {
+      _lastProgressMs = -1 << 40;
       _ticker.start();
     } else if (!shouldTick && _ticker.isActive) {
       _ticker.stop();
@@ -1212,6 +1219,12 @@ class _LandscapeLyricPanelState extends State<_LandscapeLyricPanel> {
     if (!mounted || widget.player.isScrubbing) {
       return;
     }
+    // 节流到 ~25fps：见 _kLyricTickIntervalMs 注释，避免每帧重绘整块歌词区霸占弱 GPU。
+    final ms = elapsed.inMilliseconds;
+    if (ms - _lastProgressMs < _kLyricTickIntervalMs) {
+      return;
+    }
+    _lastProgressMs = ms;
     _lyricController.setProgress(widget.player.smoothPosition);
   }
 
@@ -1237,7 +1250,9 @@ class _LandscapeLyricPanelState extends State<_LandscapeLyricPanel> {
 
     return ExcludeSemantics(
       // 歌词视图高频更新会触发 Windows AXTree 竞态崩溃，排除语义树
-      child: LyricView(
+      child: RepaintBoundary(
+        // 把歌词的高频重绘隔离在歌词区，避免连带重栅格唱片/背景层。
+        child: LyricView(
         controller: _lyricController,
         style: LyricStyles.default1.copyWith(
           textStyle: Theme.of(context).textTheme.titleLarge!.copyWith(
@@ -1265,6 +1280,7 @@ class _LandscapeLyricPanelState extends State<_LandscapeLyricPanel> {
           contentAlignment: CrossAxisAlignment.start,
           activeHighlightColor: Colors.white,
         ),
+      ),
       ),
     );
   }
@@ -2043,6 +2059,7 @@ class _LyricViewportState extends State<_LyricViewport> {
 
   late final LyricController _lyricController;
   late final Ticker _ticker;
+  int _lastProgressMs = -1 << 40;
   bool _isUserSelecting = false;
 
   @override
@@ -2111,6 +2128,7 @@ class _LyricViewportState extends State<_LyricViewport> {
         !widget.player.isScrubbing &&
         !_isUserSelecting;
     if (shouldTick && !_ticker.isActive) {
+      _lastProgressMs = -1 << 40;
       _ticker.start();
     } else if (!shouldTick && _ticker.isActive) {
       _ticker.stop();
@@ -2121,6 +2139,12 @@ class _LyricViewportState extends State<_LyricViewport> {
     if (!mounted || widget.player.isScrubbing) {
       return;
     }
+    // 节流到 ~25fps：见 _kLyricTickIntervalMs 注释，避免每帧重绘整块歌词区霸占弱 GPU。
+    final ms = elapsed.inMilliseconds;
+    if (ms - _lastProgressMs < _kLyricTickIntervalMs) {
+      return;
+    }
+    _lastProgressMs = ms;
     _lyricController.setProgress(widget.player.smoothPosition);
   }
 
@@ -2189,11 +2213,14 @@ class _LyricViewportState extends State<_LyricViewport> {
 
     return ExcludeSemantics(
       // 歌词视图高频更新会触发 Windows AXTree 竞态崩溃，排除语义树
-      child: BlurredLyricView(
-        controller: _lyricController,
-        style: lyricStyle,
-        maxBlurSigma: maxBlurSigma,
-        blurStep: blurStep,
+      child: RepaintBoundary(
+        // 把歌词的高频重绘隔离在歌词区，避免连带重栅格背景层。
+        child: BlurredLyricView(
+          controller: _lyricController,
+          style: lyricStyle,
+          maxBlurSigma: maxBlurSigma,
+          blurStep: blurStep,
+        ),
       ),
     );
   }
