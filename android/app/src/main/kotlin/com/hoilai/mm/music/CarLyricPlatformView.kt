@@ -42,7 +42,7 @@ class CarLyricPlatformView(
             when (call.method) {
                 "setLyrics" -> {
                     @Suppress("UNCHECKED_CAST")
-                    lyricView.setLyrics(call.arguments as? List<Any?> ?: emptyList())
+                    lyricView.setLyrics(call.arguments as? List<Any?> ?: emptyList<Any?>())
                     result.success(null)
                 }
                 "setStyles" -> handleSetStyles(call.arguments)
