@@ -87,6 +87,13 @@ class MainActivity : AudioServiceActivity() {
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
 
+        // 车机全屏歌词：原生 PlatformView（酷我式 clipRect+drawText、HWUI 局部栅格），
+        // 替换 flutter_lyric 的整层重栅格，让出 GPU 给并发浮窗视频。
+        flutterEngine.platformViewsController?.registry?.registerViewFactory(
+            CarLyricPlatformViewFactory.VIEW_TYPE,
+            CarLyricPlatformViewFactory(flutterEngine.dartExecutor.binaryMessenger)
+        )
+
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "kgka_music_hl/screen")
             .setMethodCallHandler { call, result ->
                 when (call.method) {
