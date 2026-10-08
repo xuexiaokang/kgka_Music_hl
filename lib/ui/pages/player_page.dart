@@ -228,6 +228,12 @@ class _PlayerBodyState extends State<_PlayerBody> {
         _handoffSuppressed = true;
         _handoffScheduled = false;
       });
+      // 关闭原生页 = 用户想退出全屏：直接关掉整个全屏播放器回到列表/首页，
+      // 不回落到会掉帧的 Flutter 横屏界面（否则等于白改）。
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        widget.onClose();
+      });
     });
   }
 
@@ -268,6 +274,7 @@ class _PlayerBodyState extends State<_PlayerBody> {
       });
     }
     if (!isCarLayout && _carHandoff) {
+      CarPlayerService.instance.dismissNative();
       CarPlayerService.instance.close();
       _carHandoff = false;
     }
