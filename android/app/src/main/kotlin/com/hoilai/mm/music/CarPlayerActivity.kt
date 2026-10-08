@@ -367,7 +367,7 @@ class CarPlayerActivity : Activity() {
 
     private fun buildQueueOverlay(): FrameLayout {
         val overlay = FrameLayout(this).apply {
-            setBackgroundColor(0x99000000)
+            setBackgroundColor(0x99000000.toInt())
             visibility = View.GONE
             isClickable = true
             setOnClickListener { hideQueue() }
