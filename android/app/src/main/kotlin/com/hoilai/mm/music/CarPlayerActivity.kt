@@ -132,7 +132,11 @@ class CarPlayerActivity : Activity() {
         disc = ImageView(this).apply {
             scaleType = ImageView.ScaleType.CENTER_CROP
             setLayerType(View.LAYER_TYPE_HARDWARE, null)
-            outlineProvider = ViewOutlineProvider.OVAL
+            outlineProvider = object : ViewOutlineProvider() {
+                override fun getOutline(view: View, outline: android.graphics.Outline) {
+                    outline.setOval(0, 0, view.width, view.height)
+                }
+            }
             clipToOutline = true
         }
         val discSize = dp(200f).toInt()
