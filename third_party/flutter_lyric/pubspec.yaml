@@ -1,0 +1,20 @@
+name: flutter_lyric
+description: >-
+  Vendored fork of flutter_lyric 3.0.7 (ozyl/flutter_lyric, MIT). Local patch only:
+  the karaoke active-highlight width now snaps to the per-tick target instead of
+  running an internal 200ms AnimationController, so the lyric layer's re-raster
+  frequency is fully governed by the app's setProgress throttle. This lets the
+  weak car SoC GPU idle between lyric words so a concurrent floating-window video
+  stops dropping frames. See lyric_line_highlight.dart (_animateWidth).
+version: 3.0.7+ka1
+homepage: https://github.com/ozyl/flutter_lyric
+
+environment:
+  sdk: '>=2.12.0 <4.0.0'
+  flutter: ">=2.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+flutter:

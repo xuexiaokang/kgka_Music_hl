@@ -1112,10 +1112,14 @@ class _LandscapeLyricPanel extends StatefulWidget {
   State<_LandscapeLyricPanel> createState() => _LandscapeLyricPanelState();
 }
 
-/// 歌词逐字进度刷新节流间隔（毫秒）。~25fps 对卡拉OK滚动肉眼无感，
-/// 但把 flutter_lyric 每帧重绘整块歌词区 + 当前行两次 saveLayer 的开销降到 1/2.4，
-/// 在车机弱 GPU 上把渲染时间让给并发运行的其它 App（如浮窗视频）。
-const int _kLyricTickIntervalMs = 40;
+/// 歌词逐字进度刷新节流间隔（毫秒）。
+/// 注意：真正让节流生效的是本地 vendored 的 flutter_lyric —— 原版库内部有个 200ms
+/// AnimationController 补间会顶著歌词区每帧(60fps)重栅格，节流 setProgress 也压不住
+/// （40ms<200ms 时补间永不停），故之前的节流 + A/B 后端切换均无效、浮窗仍掉帧。
+/// fork 已把该补间去掉、高亮宽度按每次 setProgress 直接吸附，于是重栅格频率≈本间隔
+/// 设定的帧率(50ms→~20fps)，且字与字之间空隙宽度不变→不重绘→GPU idle，把渲染时间
+/// 让给并发的浮窗视频。~20fps 对卡拉OK逐字填充肉眼无感。
+const int _kLyricTickIntervalMs = 50;
 
 class _LandscapeLyricPanelState extends State<_LandscapeLyricPanel> {
   late final LyricController _lyricController;

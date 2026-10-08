@@ -30,6 +30,12 @@ dev_dependencies:
     sdk: flutter
   flutter_lints: ^6.0.0
 
+# 本地 vendored fork：把卡拉OK高亮的库内置 200ms 补间去掉，改为按 setProgress 节流吸附，
+# 让歌词层重栅格频率真正可控、字间隔 GPU idle，解决车机全屏播放时并发浮窗视频掉帧。
+dependency_overrides:
+  flutter_lyric:
+    path: third_party/flutter_lyric
+
 flutter:
   uses-material-design: true
   assets:
