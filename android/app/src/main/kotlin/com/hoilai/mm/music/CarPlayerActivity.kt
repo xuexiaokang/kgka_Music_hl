@@ -275,7 +275,7 @@ class CarPlayerActivity : Activity() {
             object : android.view.GestureDetector.SimpleOnGestureListener() {
                 override fun onDown(e: android.view.MotionEvent) = true
                 override fun onFling(
-                    e1: android.view.MotionEvent?, e2: android.view.MotionEvent?,
+                    e1: android.view.MotionEvent?, e2: android.view.MotionEvent,
                     vx: Float, vy: Float
                 ): Boolean {
                     if (kotlin.math.abs(vx) > 200f && kotlin.math.abs(vx) > kotlin.math.abs(vy)) {
@@ -824,7 +824,7 @@ class CarPlayerActivity : Activity() {
         if (seek.width > 0) place.run() else seek.post(place)
     }
 
-    private fun showToast(text: String) {
+    internal fun showToast(text: String) {
         android.widget.Toast.makeText(this, text, android.widget.Toast.LENGTH_SHORT).show()
     }
 
