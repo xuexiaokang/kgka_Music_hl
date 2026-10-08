@@ -70,6 +70,11 @@ object CarPlayerBridge {
                 "sync" -> current?.onSync(call.arguments as? Map<*, *>).also { result.success(null) }
                 "meta" -> current?.onMeta(call.arguments as? Map<*, *>).also { result.success(null) }
                 "lyrics" -> current?.onLyrics(call.arguments as? Map<*, *>).also { result.success(null) }
+                "toast" -> {
+                    val text = (call.arguments as? Map<*, *>)?.get("text") as? String
+                    if (!text.isNullOrEmpty()) current?.showToast(text)
+                    result.success(null)
+                }
                 "close" -> {
                     current?.finishExternally()
                     result.success(null)

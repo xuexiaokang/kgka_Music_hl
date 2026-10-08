@@ -7,7 +7,9 @@ import android.graphics.Paint
 import android.graphics.Rect
 import android.util.AttributeSet
 import android.util.TypedValue
+import android.view.MotionEvent
 import android.view.View
+import android.view.ViewConfiguration
 import android.widget.OverScroller
 import kotlin.math.abs
 import kotlin.math.roundToInt
@@ -79,8 +81,82 @@ class CarLyricView @JvmOverloads constructor(
     private var offsetY = 0f
     private var anchorFraction = 0.32f
 
+    // ---- 触摸交互：点击歌词行 seek + 手动上下拖动滚动 ----
+    /** 点击某行时回调其起始时间（ms），由宿主 Activity 转发给 Dart 执行 seek。 */
+    var onLineSeek: ((Long) -> Unit)? = null
+    /** 用户正在拖动/刚交互过，宿主可据此暂缓自动跟随滚动。 */
+    var userInteracting = false
+        private set
+
+    private var downX = 0f
+    private var downY = 0f
+    private var lastY = 0f
+    private var downTime = 0L
+    private var dragging = false
+    private val touchSlop = ViewConfiguration.get(context).scaledTouchSlop
+
     init {
         applyPaints()
+    }
+
+    override fun onTouchEvent(event: MotionEvent): Boolean {
+        if (texts.isEmpty()) return false
+        when (event.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                downX = event.x; downY = event.y; lastY = event.y
+                downTime = System.currentTimeMillis()
+                dragging = false
+                userInteracting = true
+                scroller.abortAnimation()
+                parent?.requestDisallowInterceptTouchEvent(true)
+                return true
+            }
+            MotionEvent.ACTION_MOVE -> {
+                val dy = event.y - lastY
+                lastY = event.y
+                if (!dragging && abs(event.y - downY) > touchSlop) dragging = true
+                if (dragging) {
+                    // 手指向下 → 内容向下（offsetY 减小）；限制在内容范围内
+                    val maxScroll = (contentHeight - height + paddingVerticalPx() * 2).coerceAtLeast(0f)
+                    offsetY = (offsetY - dy).coerceIn(0f, maxScroll)
+                    invalidate()
+                }
+                return true
+            }
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                val quick = System.currentTimeMillis() - downTime < 300
+                val moved = abs(event.y - downY) > touchSlop || abs(event.x - downX) > touchSlop
+                if (event.actionMasked == MotionEvent.ACTION_UP && quick && !moved) {
+                    val idx = lineIndexAtY(event.y)
+                    if (idx in texts.indices) {
+                        val start = startsMs[idx]
+                        currentMs = start
+                        activeIndex = idx
+                        invalidateLayout()
+                        scrollToActive(smooth = false)
+                        invalidate()
+                        onLineSeek?.invoke(start)
+                    }
+                }
+                dragging = false
+                // 交互结束后延时交回自动跟随：下一次换行会自然滚回当前行
+                postDelayed({ userInteracting = false }, 2500)
+                return true
+            }
+        }
+        return super.onTouchEvent(event)
+    }
+
+    /** 命中测试：给定屏幕 y 找出对应歌词行（与 onDraw 的坐标换算一致）。 */
+    private fun lineIndexAtY(y: Float): Int {
+        val padY = paddingVerticalPx()
+        val n = texts.size
+        for (i in 0 until n) {
+            val top = padY + lineTop[i] - offsetY
+            val bottom = top + lineHeight[i]
+            if (y >= top && y <= bottom) return i
+        }
+        return -1
     }
 
     private fun applyPaints() {

@@ -36,6 +36,7 @@ import kotlin.math.max
 class CarPlayerActivity : Activity() {
 
     private lateinit var bgView: View
+    private lateinit var root: FrameLayout
     private lateinit var lyricView: CarLyricView
     private lateinit var discWrap: FrameLayout
     private lateinit var discGroup: FrameLayout
@@ -44,14 +45,19 @@ class CarPlayerActivity : Activity() {
     private lateinit var titleText: TextView
     private lateinit var artistText: TextView
     private lateinit var seek: SeekBar
+    private lateinit var seekRow: LinearLayout
+    private lateinit var climaxDot: View
     private lateinit var elapsedText: TextView
     private lateinit var remainText: TextView
     private lateinit var playBtn: ImageButton
+    private lateinit var playProgress: android.widget.ProgressBar
     private lateinit var modeBtn: ImageButton
     private lateinit var likeBtn: ImageButton
+    private lateinit var moreBtn: ImageButton
     private lateinit var queueOverlay: FrameLayout
     private lateinit var queueList: LinearLayout
     private lateinit var queueHeader: TextView
+    private var sheet: FrameLayout? = null
 
     private var rotAnimator: ValueAnimator? = null
 
@@ -59,11 +65,30 @@ class CarPlayerActivity : Activity() {
     private var anchorUptime = 0L
     private var durationMs = 0L
     private var playing = false
+    private var buffering = false
     private var seekDragging = false
     private var coverUrl: String? = null
     private var coverToken = 0
     private var playMode = 0
+    private var playModeLabel = ""
+    private var wantModeToast = false
     private var liked = false
+    private var canLike = true
+    private var climaxStartMs = -1L
+
+    // "更多"面板当前状态
+    private var qualityIndex = 0
+    private var qualityLabel = ""
+    private var speed = 1.0
+    private var speedLabel = ""
+    private var effectLabel = ""
+    private var effectsSupported = true
+    private var effectNames: List<String> = emptyList()
+    private var desktopLyricsSupported = false
+    private var desktopLyricsEnabled = false
+    private var sleepActive = false
+    private var sleepFinishCurrent = false
+    private var sleepRemainingMs: Long? = null
 
     private var clockStarted = false
     private val frameCb = object : Choreographer.FrameCallback {
@@ -76,7 +101,7 @@ class CarPlayerActivity : Activity() {
             seek.progress = cur.toInt()
             elapsedText.text = fmt(cur)
             remainText.text = "-" + fmt(max(0L, durationMs - cur))
-            lyricView.setProgress(cur)
+            if (!lyricView.userInteracting) lyricView.setProgress(cur)
             Choreographer.getInstance().postFrameCallback(this)
         }
     }
@@ -115,6 +140,10 @@ class CarPlayerActivity : Activity() {
     }
 
     override fun onBackPressed() {
+        if (sheet != null) {
+            closeSheet()
+            return
+        }
         if (queueOverlay.visibility == View.VISIBLE) {
             hideQueue()
             return
@@ -135,7 +164,7 @@ class CarPlayerActivity : Activity() {
     // ---------------------------------------------------------------- UI
 
     private fun buildUi() {
-        val root = FrameLayout(this)
+        root = FrameLayout(this)
 
         bgView = View(this).apply {
             layoutParams = FrameLayout.LayoutParams(
@@ -167,6 +196,10 @@ class CarPlayerActivity : Activity() {
             CarPlayerBridge.sendEvent("like")
         }
         topBar.addView(likeBtn)
+        moreBtn = iconButton(R.drawable.ic_kg_more, dp(24f).toInt(), 0xFFEEFFFFFF.toInt()) {
+            showMoreSheet()
+        }
+        topBar.addView(moreBtn)
         content.addView(topBar, LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
 
@@ -237,6 +270,25 @@ class CarPlayerActivity : Activity() {
         )
         left.addView(discWrap)
 
+        // 唱片区左右滑动切歌（对齐 Flutter 横屏 _LandscapeArtworkShowcase 的横向拖拽手势）
+        val discGesture = android.view.GestureDetector(this,
+            object : android.view.GestureDetector.SimpleOnGestureListener() {
+                override fun onDown(e: android.view.MotionEvent) = true
+                override fun onFling(
+                    e1: android.view.MotionEvent?, e2: android.view.MotionEvent?,
+                    vx: Float, vy: Float
+                ): Boolean {
+                    if (kotlin.math.abs(vx) > 200f && kotlin.math.abs(vx) > kotlin.math.abs(vy)) {
+                        if (vx < 0) CarPlayerBridge.sendEvent("next")
+                        else CarPlayerBridge.sendEvent("prev")
+                        return true
+                    }
+                    return false
+                }
+            })
+        discWrap.isClickable = true
+        discWrap.setOnTouchListener { _, ev -> discGesture.onTouchEvent(ev) }
+
         titleText = TextView(this).apply {
             setTextColor(Color.WHITE)
             textSize = 22f
@@ -261,6 +313,10 @@ class CarPlayerActivity : Activity() {
 
         lyricView = CarLyricView(this).apply {
             setBackgroundColor(Color.TRANSPARENT)
+            onLineSeek = { ms ->
+                anchorPosMs = ms; anchorUptime = android.os.SystemClock.elapsedRealtime()
+                CarPlayerBridge.sendEvent("seek", mapOf("ms" to ms))
+            }
         }
         topRow.addView(lyricView, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, .58f))
         content.addView(topRow)
@@ -293,10 +349,28 @@ class CarPlayerActivity : Activity() {
             })
         }
         seekRow.addView(elapsedText)
-        seekRow.addView(seek, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).also {
+        // 用 FrameLayout 包裹进度条，叠加上"高潮片段"小圆点标记（对齐 Flutter _Progress）
+        val seekWrap = FrameLayout(this)
+        seekWrap.addView(seek, FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT
+        ))
+        climaxDot = View(this).apply {
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.OVAL
+                setColor(0xFFFFFFFF.toInt())
+                setStroke(dp(1f).toInt(), 0x66000000)
+            }
+            visibility = View.GONE
+            isClickable = false
+        }
+        seekWrap.addView(climaxDot, FrameLayout.LayoutParams(dp(8f).toInt(), dp(8f).toInt()).also {
+            it.gravity = Gravity.CENTER_VERTICAL
+        })
+        seekRow.addView(seekWrap, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).also {
             it.marginStart = dp(12f).toInt(); it.marginEnd = dp(12f).toInt()
         })
         seekRow.addView(remainText)
+        this.seekRow = seekRow
         content.addView(seekRow, LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
 
@@ -307,6 +381,7 @@ class CarPlayerActivity : Activity() {
             setPadding(0, dp(10f).toInt(), 0, dp(4f).toInt())
         }
         modeBtn = iconButton(R.drawable.ic_kg_mode_loop, dp(30f).toInt(), 0xFFEAEAEF.toInt()) {
+            wantModeToast = true
             CarPlayerBridge.sendEvent("playMode")
         }
         btnRow.addView(modeBtn)
@@ -314,7 +389,19 @@ class CarPlayerActivity : Activity() {
             CarPlayerBridge.sendEvent("prev")
         })
         playBtn = bigPlayButton()
-        btnRow.addView(playBtn)
+        // 播放按钮外叠一层环形进度，缓冲时显示（对齐 Flutter _Controls 的 CircularProgressIndicator）
+        val playWrap = FrameLayout(this)
+        playProgress = android.widget.ProgressBar(this, null, android.R.attr.progressBarStyleSmall).apply {
+            isIndeterminate = true
+            visibility = View.GONE
+            scaleX = 1.2f; scaleY = 1.2f
+        }
+        playWrap.addView(playBtn)
+        playWrap.addView(
+            playProgress,
+            FrameLayout.LayoutParams(dp(34f).toInt(), dp(34f).toInt(), Gravity.CENTER)
+        )
+        btnRow.addView(playWrap)
         btnRow.addView(iconButton(R.drawable.ic_kg_next, dp(38f).toInt(), 0xFFF2F2F5.toInt()) {
             CarPlayerBridge.sendEvent("next")
         })
@@ -443,6 +530,163 @@ class CarPlayerActivity : Activity() {
     private fun showQueue() { queueOverlay.visibility = View.VISIBLE }
     private fun hideQueue() { queueOverlay.visibility = View.GONE }
 
+    // --------------------------------------------------------- 更多面板
+
+    /** 一行：主标题 + 可选右侧（当前值/开关态）；点击触发 onClick。 */
+    private class Row(val label: String, val trailing: String? = null, val selected: Boolean = false, val onClick: () -> Unit)
+
+    /** 通用原生底部弹层（不新建 Activity/task，避免车机出现第二窗口 / Flutter 闪屏）。 */
+    private fun openSheet(title: String, rows: List<Row>) {
+        closeSheet()
+        val scrim = FrameLayout(this).apply {
+            setBackgroundColor(0x99000000.toInt())
+            isClickable = true
+            setOnClickListener { closeSheet() }
+            layoutParams = FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT
+            )
+        }
+        val panel = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = resources.getDrawable(R.drawable.kg_queue_panel_bg, null)
+            setPadding(dp(20f).toInt(), dp(14f).toInt(), dp(20f).toInt(), dp(6f).toInt())
+            layoutParams = FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT
+            ).also { it.gravity = Gravity.BOTTOM }
+            isClickable = true
+        }
+        panel.addView(TextView(this).apply {
+            text = title; setTextColor(Color.WHITE); textSize = 17f
+            setTypeface(typeface, android.graphics.Typeface.BOLD)
+            setPadding(dp(4f).toInt(), 0, dp(4f).toInt(), dp(10f).toInt())
+        })
+        val scroll = ScrollView(this)
+        val list = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        rows.forEach { r ->
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(dp(4f).toInt(), dp(14f).toInt(), dp(4f).toInt(), dp(14f).toInt())
+                layoutParams = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+            }
+            row.addView(TextView(this).apply {
+                text = r.label; textSize = 16f
+                setTextColor(if (r.selected) ACCENT else Color.WHITE)
+            }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+            if (r.trailing != null) {
+                row.addView(TextView(this).apply {
+                    text = r.trailing; textSize = 14f
+                    setTextColor(if (r.selected) ACCENT else 0xFF9A9AA0.toInt())
+                })
+            }
+            row.setOnClickListener { r.onClick() }
+            list.addView(row)
+            list.addView(View(this).apply {
+                setBackgroundColor(0x1FFFFFFF)
+                layoutParams = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT, 1)
+            })
+        }
+        scroll.addView(list, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
+        panel.addView(scroll, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
+        scrim.addView(panel)
+        root.addView(scrim)
+        sheet = scrim
+        // 横屏车机高度有限：列表过长时限高到屏高 75%，让内部 ScrollView 生效；短列表不填充。
+        val maxH = (resources.displayMetrics.heightPixels * 0.75f).toInt()
+        panel.viewTreeObserver.addOnGlobalLayoutListener(object :
+            android.view.ViewTreeObserver.OnGlobalLayoutListener {
+            override fun onGlobalLayout() {
+                panel.viewTreeObserver.removeOnGlobalLayoutListener(this)
+                if (panel.height > maxH) {
+                    val overflow = panel.height - maxH
+                    (scroll.layoutParams as LinearLayout.LayoutParams).let {
+                        it.height = (scroll.height - overflow).coerceAtLeast(dp(120f).toInt())
+                        scroll.layoutParams = it
+                    }
+                    (panel.layoutParams as FrameLayout.LayoutParams).let {
+                        it.height = maxH
+                        panel.layoutParams = it
+                    }
+                }
+            }
+        })
+    }
+
+    private fun closeSheet() {
+        sheet?.let { root.removeView(it) }
+        sheet = null
+    }
+
+    private fun showMoreSheet() {
+        val rows = ArrayList<Row>()
+        rows.add(Row("倍速播放", speedLabel) {
+            openSheet("倍速播放", listOf(0.5, 0.75, 1.0, 1.25, 1.5, 2.0).map { v ->
+                Row(speedText(v), selected = kotlin.math.abs(v - speed) < 0.001) {
+                    CarPlayerBridge.sendEvent("setSpeed", mapOf("speed" to v)); closeSheet()
+                }
+            })
+        })
+        rows.add(Row("音质", qualityLabel) {
+            val opts = listOf("标准音质", "高品音质", "无损音质")
+            openSheet("切换音质", opts.mapIndexed { i, name ->
+                Row(name, selected = i == qualityIndex) {
+                    CarPlayerBridge.sendEvent("setQuality", mapOf("qualityIndex" to i)); closeSheet()
+                }
+            })
+        })
+        if (effectsSupported && effectNames.isNotEmpty()) {
+            rows.add(Row("音效", effectLabel) {
+                openSheet("音效", effectNames.map { name ->
+                    Row(name, selected = effectLabel.contains(name)) {
+                        CarPlayerBridge.sendEvent("setEffect", mapOf("name" to name)); closeSheet()
+                    }
+                })
+            })
+        }
+        rows.add(Row("试听高潮", null) {
+            CarPlayerBridge.sendEvent("climax"); closeSheet()
+        })
+        rows.add(Row("下一首播放", null) {
+            CarPlayerBridge.sendEvent("playNext"); closeSheet()
+        })
+        rows.add(Row("定时播放", sleepSubtitle()) {
+            openSheet("定时播放", listOf(
+                Row("不开启", selected = !sleepActive) {
+                    CarPlayerBridge.sendEvent("sleepTimer", mapOf("minutes" to 0)); closeSheet()
+                },
+                Row("播完当前单曲", selected = sleepFinishCurrent) {
+                    CarPlayerBridge.sendEvent("sleepTimer", mapOf("finishCurrent" to true)); closeSheet()
+                },
+                *listOf(15, 30, 45, 60).map { m ->
+                    Row("$m 分钟") {
+                        CarPlayerBridge.sendEvent("sleepTimer", mapOf("minutes" to m)); closeSheet()
+                    }
+                }.toTypedArray()
+            ))
+        })
+        if (desktopLyricsSupported) {
+            rows.add(Row("桌面歌词", if (desktopLyricsEnabled) "已开启" else "已关闭") {
+                CarPlayerBridge.sendEvent("toggleDesktopLyrics"); closeSheet()
+            })
+        }
+        openSheet("更多", rows)
+    }
+
+    private fun speedText(v: Double): String =
+        if (v % 1.0 == 0.0) "${v.toInt()}.0x" else "${v}x"
+
+    private fun sleepSubtitle(): String {
+        if (sleepFinishCurrent) return "播完当前单曲"
+        if (!sleepActive) return "不开启"
+        val rem = sleepRemainingMs ?: 0L
+        val total = (rem / 1000).coerceAtLeast(0)
+        return "%02d:%02d".format(total / 60, total % 60)
+    }
+
     // --------------------------------------------------------- 快照/事件
 
     private fun applySnapshot(m: Map<*, *>) {
@@ -459,7 +703,27 @@ class CarPlayerActivity : Activity() {
         val url = m["coverUrl"] as? String
         if (url != coverUrl) { coverUrl = url; loadCover(url) }
         (m["playMode"] as? Number)?.let { setPlayMode(it.toInt()) }
+        playModeLabel = (m["playModeLabel"] as? String) ?: playModeLabel
         (m["isLiked"] as? Boolean)?.let { setLiked(it) }
+        canLike = (m["canLike"] as? Boolean) ?: true
+        applyLikeEnabled()
+        (m["climaxStartMs"] as? Number)?.let { climaxStartMs = it.toLong() }
+            ?: run { climaxStartMs = -1L }
+        positionClimaxDot()
+        // "更多"面板状态
+        qualityIndex = (m["audioQualityIndex"] as? Number)?.toInt() ?: qualityIndex
+        qualityLabel = (m["audioQualityLabel"] as? String) ?: qualityLabel
+        speed = (m["playbackSpeed"] as? Number)?.toDouble() ?: speed
+        speedLabel = (m["playbackSpeedLabel"] as? String) ?: speedLabel
+        effectLabel = (m["audioEffectLabel"] as? String) ?: effectLabel
+        effectsSupported = (m["effectsSupported"] as? Boolean) ?: effectsSupported
+        @Suppress("UNCHECKED_CAST")
+        (m["effectNames"] as? List<String>)?.let { effectNames = it }
+        desktopLyricsSupported = (m["desktopLyricsSupported"] as? Boolean) ?: desktopLyricsSupported
+        desktopLyricsEnabled = (m["desktopLyricsEnabled"] as? Boolean) ?: desktopLyricsEnabled
+        sleepActive = (m["sleepActive"] as? Boolean) ?: sleepActive
+        sleepFinishCurrent = (m["sleepFinishCurrent"] as? Boolean) ?: sleepFinishCurrent
+        sleepRemainingMs = (m["sleepRemainingMs"] as? Number)?.toLong()
         @Suppress("UNCHECKED_CAST")
         (m["queue"] as? List<Map<*, *>>)?.let { rebuildQueue(it) }
     }
@@ -476,18 +740,21 @@ class CarPlayerActivity : Activity() {
         val pos = (m["positionMs"] as? Number)?.toLong() ?: anchorPosMs
         durationMs = (m["durationMs"] as? Number)?.toLong() ?: durationMs
         playing = (m["isPlaying"] as? Boolean) ?: playing
+        buffering = (m["isBuffering"] as? Boolean) ?: buffering
         (m["playMode"] as? Number)?.let { setPlayMode(it.toInt()) }
         (m["isLiked"] as? Boolean)?.let { setLiked(it) }
         anchorPosMs = pos
         anchorUptime = android.os.SystemClock.elapsedRealtime()
         seek.max = max(1, durationMs.toInt())
         applyPlayState(playing)
+        applyBuffering(buffering)
+        positionClimaxDot()
         if (!playing && !seekDragging) {
             val cur = currentMs()
             seek.progress = cur.toInt()
             elapsedText.text = fmt(cur)
             remainText.text = "-" + fmt(max(0L, durationMs - cur))
-            lyricView.setProgress(cur)
+            if (!lyricView.userInteracting) lyricView.setProgress(cur)
         }
     }
 
@@ -501,17 +768,64 @@ class CarPlayerActivity : Activity() {
         }
         modeBtn.setImageResource(res)
         modeBtn.tag = mode
+        if (wantModeToast) {
+            wantModeToast = false
+            showToast("已切换到${playModeLabel}")
+        }
     }
 
     private fun setLiked(v: Boolean) {
         liked = v
-        if (v) {
+        if (v && canLike) {
             likeBtn.setImageResource(R.drawable.ic_kg_heart_fill)
             likeBtn.setColorFilter(0xFFFF4A6B.toInt())
         } else {
             likeBtn.setImageResource(R.drawable.ic_kg_heart_border)
             likeBtn.setColorFilter(0xFFEEFFFFFF.toInt())
         }
+    }
+
+    /** 非酷狗来源不可收藏：红心置灰且禁用点击（对齐 Flutter 横屏 header 的 gating）。 */
+    private fun applyLikeEnabled() {
+        likeBtn.isEnabled = canLike
+        likeBtn.alpha = if (canLike) 1f else 0.35f
+    }
+
+    /** 缓冲时把播放图标淡出、显示环形进度；否则反之（对齐 Flutter 播放按钮的 loading 态）。 */
+    private fun applyBuffering(b: Boolean) {
+        if (!::playProgress.isInitialized) return
+        playProgress.visibility = if (b) View.VISIBLE else View.GONE
+        playBtn.alpha = if (b) 0f else 1f
+        if (b) {
+            playBtn.isEnabled = false
+            if (!playProgress.isShown) playProgress.bringToFront()
+        } else {
+            playBtn.isEnabled = true
+        }
+    }
+
+    /** 在进度条上按高潮起始时间比例摆放小圆点（duration 未知时隐藏，等待下次 sync）。 */
+    private fun positionClimaxDot() {
+        if (!::climaxDot.isInitialized) return
+        if (climaxStartMs < 0L || durationMs <= 0L) {
+            climaxDot.visibility = View.GONE
+            return
+        }
+        climaxDot.visibility = View.VISIBLE
+        val place = Runnable {
+            val w = seek.width
+            if (w <= 0) { seek.post { positionClimaxDot() }; return@Runnable }
+            val pad = seek.thumbOffset.toFloat()
+            val frac = (climaxStartMs.toFloat() / durationMs).coerceIn(0f, 1f)
+            val x = (pad + frac * (w - 2 * pad) - dp(4f)).toInt().coerceIn(0, w - climaxDot.width)
+            (climaxDot.layoutParams as FrameLayout.LayoutParams).leftMargin = x
+            climaxDot.requestLayout()
+        }
+        if (seek.width > 0) place.run() else seek.post(place)
+    }
+
+    private fun showToast(text: String) {
+        android.widget.Toast.makeText(this, text, android.widget.Toast.LENGTH_SHORT).show()
     }
 
     private fun applyPlayState(isPlaying: Boolean) {

@@ -86,14 +86,35 @@ class CarPlayerService {
   Map<String, dynamic> _metaMap(PlayerController p) {
     final s = p.currentSong;
     final liked = (_auth != null && s != null) ? _auth!.isLiked(s) : false;
+    final isKugou = s?.source == SongSource.kugou;
+    final climax = p.climax;
     return {
       'title': s?.title ?? '',
       'artist': s?.artist ?? '',
       'album': s?.albumName ?? '',
       'coverUrl': s?.coverUrl,
       'playMode': p.playbackMode.index,
+      'playModeLabel': p.playbackModeLabel,
       'isLiked': liked,
+      'canLike': isKugou,
+      'isKugou': isKugou,
       'queue': _queueList(p),
+      // ---- "更多"面板：当前选择快照，供原生渲染勾选/副标题 ----
+      'audioQualityIndex': p.audioQuality.index,
+      'audioQualityLabel': p.audioQuality.label,
+      'playbackSpeed': p.playbackSpeed,
+      'playbackSpeedLabel': p.playbackSpeedLabel,
+      'audioEffectLabel': p.audioEffectsLabel,
+      'effectsSupported': p.isAudioEffectsSupported,
+      'effectNames': [for (final e in PlayerController.equalizerPresets) e.name],
+      'desktopLyricsSupported': p.isDesktopLyricsSupported,
+      'desktopLyricsEnabled': p.desktopLyricsEnabled,
+      'lyricBlurEnabled': p.lyricBlurEnabled,
+      'sleepActive': p.isSleepTimerActive,
+      'sleepFinishCurrent': p.isSleepFinishCurrentSong,
+      'sleepRemainingMs': p.sleepTimerRemaining?.inMilliseconds,
+      'climaxStartMs':
+          (climax != null && climax.isValid) ? climax.startTime.inMilliseconds : null,
     };
   }
 
@@ -117,6 +138,8 @@ class CarPlayerService {
       'positionMs': p.smoothPosition.inMilliseconds,
       'durationMs': p.duration.inMilliseconds,
       'isPlaying': p.isPlaying,
+      'isBuffering': p.isBuffering,
+      'isPreparing': p.isPreparing,
       'playMode': p.playbackMode.index,
       'isLiked': (_auth != null && s != null) ? _auth!.isLiked(s) : false,
     };
@@ -176,6 +199,12 @@ class CarPlayerService {
     _toNative.invokeMethod<void>('sync', _transportMap(p));
   }
 
+  void _pushMeta() {
+    final p = _player;
+    if (p == null) return;
+    _toNative.invokeMethod<void>('meta', _metaMap(p));
+  }
+
   Future<void> _onNativeCall(MethodCall call) async {
     final p = _player;
     switch (call.method) {
@@ -197,6 +226,7 @@ class CarPlayerService {
         break;
       case 'playMode':
         await p?.cyclePlaybackMode();
+        _pushMeta();
         _pushSync();
         break;
       case 'like':
@@ -212,6 +242,72 @@ class CarPlayerService {
         final idx = (args?['index'] as num?)?.toInt() ?? -1;
         if (p != null && idx >= 0 && idx < p.queue.length) {
           await p.playSong(p.queue[idx], queue: p.queue);
+        }
+        break;
+      case 'setSpeed':
+        final speed = (call.arguments as Map?)?['speed'] as num?;
+        if (p != null && speed != null) {
+          await p.setPlaybackSpeed(speed.toDouble());
+          _pushMeta();
+          _pushSync();
+        }
+        break;
+      case 'setQuality':
+        final qIdx = (call.arguments as Map?)?['qualityIndex'] as num?;
+        if (p != null && qIdx != null) {
+          final q = AudioQuality
+              .values[qIdx.toInt().clamp(0, AudioQuality.values.length - 1)];
+          await p.setAudioQuality(q, reloadCurrent: true);
+          _pushMeta();
+          _pushSync();
+        }
+        break;
+      case 'setEffect':
+        final name = (call.arguments as Map?)?['name'] as String?;
+        if (p != null && name != null) {
+          final preset = PlayerController.equalizerPresets
+              .firstWhere((e) => e.name == name, orElse: () => PlayerController.equalizerPresets.first);
+          await p.applyEqualizerPreset(preset);
+          _pushMeta();
+        }
+        break;
+      case 'climax':
+        if (p != null) {
+          final ok = await p.playClimaxPreview();
+          _pushMeta();
+          _pushSync();
+          _toNative.invokeMethod<void>('toast', {
+            'text': ok ? '已跳转到高潮片段' : '暂无高潮片段',
+          });
+        }
+        break;
+      case 'sleepTimer':
+        if (p != null) {
+          final args = call.arguments as Map?;
+          final minutes = (args?['minutes'] as num?)?.toInt() ?? 0;
+          final finishCurrent = args?['finishCurrent'] == true;
+          if (minutes <= 0 && !finishCurrent) {
+            p.cancelSleepTimer();
+          } else if (finishCurrent) {
+            p.setSleepTimer(const Duration(milliseconds: 1), finishCurrentSong: true);
+          } else {
+            p.setSleepTimer(Duration(minutes: minutes));
+          }
+          _pushMeta();
+        }
+        break;
+      case 'toggleDesktopLyrics':
+        if (p != null) {
+          await p.setDesktopLyricsEnabled(!p.desktopLyricsEnabled);
+          _pushMeta();
+        }
+        break;
+      case 'playNext':
+        final song = p?.currentSong;
+        if (p != null && song != null) {
+          await p.addToQueue(song);
+          _pushMeta();
+          _toNative.invokeMethod<void>('toast', {'text': '已添加到下一首播放'});
         }
         break;
       case 'requestSync':
