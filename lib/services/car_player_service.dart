@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
+import '../controllers/auth_controller.dart';
 import '../controllers/player_controller.dart';
 import '../models/music_models.dart';
 
@@ -22,6 +23,7 @@ class CarPlayerService {
   static const MethodChannel _fromNative = MethodChannel('ka.car_player/flutter');
 
   PlayerController? _player;
+  AuthController? _auth;
   Timer? _syncTimer;
   bool _active = false;
   bool _handlerBound = false;
@@ -32,9 +34,10 @@ class CarPlayerService {
 
   void onClosed(void Function() cb) => _onClosed = cb;
 
-  Future<void> open(PlayerController player) async {
+  Future<void> open(PlayerController player, AuthController auth) async {
     if (_active) return;
     _player = player;
+    _auth = auth;
     if (!_handlerBound) {
       _fromNative.setMethodCallHandler(_onNativeCall);
       _handlerBound = true;
@@ -58,6 +61,7 @@ class CarPlayerService {
     _syncTimer = null;
     _player?.removeListener(_onPlayerChanged);
     _player = null;
+    _auth = null;
   }
 
   /// 关闭原生页（用户从 Flutter 侧返回时）。
@@ -81,19 +85,42 @@ class CarPlayerService {
 
   Map<String, dynamic> _metaMap(PlayerController p) {
     final s = p.currentSong;
+    final liked = (_auth != null && s != null) ? _auth!.isLiked(s) : false;
     return {
       'title': s?.title ?? '',
       'artist': s?.artist ?? '',
       'album': s?.albumName ?? '',
       'coverUrl': s?.coverUrl,
+      'playMode': p.playbackMode.index,
+      'isLiked': liked,
+      'queue': _queueList(p),
     };
   }
 
-  Map<String, dynamic> _transportMap(PlayerController p) => {
-        'positionMs': p.smoothPosition.inMilliseconds,
-        'durationMs': p.duration.inMilliseconds,
-        'isPlaying': p.isPlaying,
-      };
+  /// 播放队列快照，供原生全屏的"歌单/队列"面板展示。
+  List<Map<String, dynamic>> _queueList(PlayerController p) {
+    final cur = p.currentSong;
+    return [
+      for (var i = 0; i < p.queue.length; i++)
+        {
+          'index': i,
+          'title': p.queue[i].title,
+          'artist': p.queue[i].artist,
+          'active': cur != null && p.queue[i].hash == cur.hash,
+        },
+    ];
+  }
+
+  Map<String, dynamic> _transportMap(PlayerController p) {
+    final s = p.currentSong;
+    return {
+      'positionMs': p.smoothPosition.inMilliseconds,
+      'durationMs': p.duration.inMilliseconds,
+      'isPlaying': p.isPlaying,
+      'playMode': p.playbackMode.index,
+      'isLiked': (_auth != null && s != null) ? _auth!.isLiked(s) : false,
+    };
+  }
 
   Map<String, dynamic> _styles() => {
         'activeSizeSp': 30.0,
@@ -167,6 +194,25 @@ class CarPlayerService {
         break;
       case 'prev':
         await p?.previous();
+        break;
+      case 'playMode':
+        await p?.cyclePlaybackMode();
+        _pushSync();
+        break;
+      case 'like':
+        final song = p?.currentSong;
+        final auth = _auth;
+        if (song != null && auth != null) {
+          await auth.toggleLike(song);
+          _pushSync();
+        }
+        break;
+      case 'playQueueIndex':
+        final args = call.arguments as Map?;
+        final idx = (args?['index'] as num?)?.toInt() ?? -1;
+        if (p != null && idx >= 0 && idx < p.queue.length) {
+          await p.playSong(p.queue[idx], queue: p.queue);
+        }
         break;
       case 'requestSync':
         if (p == null) break;

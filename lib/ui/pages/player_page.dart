@@ -269,7 +269,7 @@ class _PlayerBodyState extends State<_PlayerBody> {
       _handoffScheduled = true;
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
-        CarPlayerService.instance.open(widget.player);
+        CarPlayerService.instance.open(widget.player, widget.auth);
         setState(() => _carHandoff = CarPlayerService.instance.isActive);
       });
     }
