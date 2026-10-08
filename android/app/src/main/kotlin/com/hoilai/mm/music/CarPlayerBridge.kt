@@ -1,10 +1,12 @@
 package com.hoilai.mm.music
 
+import android.app.Activity
 import android.content.Context
 import android.content.Intent
 import io.flutter.plugin.common.BinaryMessenger
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
+import java.lang.ref.WeakReference
 
 /**
  * 全原生车机播放器的桥接单例。
@@ -20,6 +22,7 @@ import io.flutter.plugin.common.MethodChannel
 object CarPlayerBridge {
 
     private var appContext: Context? = null
+    private var hostRef: WeakReference<Activity>? = null
     private var toNative: MethodChannel? = null
     private var fromNative: MethodChannel? = null
 
@@ -31,6 +34,7 @@ object CarPlayerBridge {
 
     fun init(context: Context, messenger: BinaryMessenger) {
         appContext = context.applicationContext
+        if (context is Activity) hostRef = WeakReference(context)
         toNative = MethodChannel(messenger, "ka.car_player/native").apply {
             setMethodCallHandler { call, result -> handle(call, result) }
         }
@@ -42,14 +46,23 @@ object CarPlayerBridge {
             when (call.method) {
                 "open" -> {
                     snapshot = call.arguments as? Map<*, *>
-                    val ctx = appContext
+                    val host = hostRef?.get()?.takeIf { !it.isFinishing }
+                    val ctx: Context? = host ?: appContext
                     if (ctx == null) {
                         result.error("no_context", "appContext null", null)
                         return
                     }
-                    val intent = Intent(ctx, CarPlayerActivity::class.java).apply {
-                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or
-                                Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+                    val intent = Intent(ctx, CarPlayerActivity::class.java)
+                    if (host == null) {
+                        // 从非 Activity 上下文启动必须 NEW_TASK（回退路径，会另起独立 task）
+                        intent.addFlags(
+                            Intent.FLAG_ACTIVITY_NEW_TASK or
+                                Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
+                        )
+                    } else {
+                        // 关键：用宿主 Activity 上下文、同 task 内启动，只盖在 Flutter 上，
+                        // 不再另起一个独立窗口（修复车机同时出现两个全屏播放窗口）
+                        intent.addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP)
                     }
                     ctx.startActivity(intent)
                     result.success(true)

@@ -51,6 +51,8 @@
         <activity
             android:name=".CarPlayerActivity"
             android:exported="false"
+            android:launchMode="singleTop"
+            android:excludeFromRecents="true"
             android:screenOrientation="sensorLandscape"
             android:hardwareAccelerated="true"
             android:theme="@android:style/Theme.Black.NoTitleBar.Fullscreen"
