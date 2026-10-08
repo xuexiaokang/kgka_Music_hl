@@ -121,11 +121,15 @@ class CarPlayerActivity : Activity() {
         }
         CarPlayerBridge.sendEvent("closed")
         super.onBackPressed()
+        overridePendingTransition(0, 0)
     }
 
     /** Dart 主动要求关闭（不回调 closed，因为是 Dart 触发的）。 */
     fun finishExternally() {
-        runOnUiThread { finish() }
+        runOnUiThread {
+            finish()
+            overridePendingTransition(0, 0)
+        }
     }
 
     // ---------------------------------------------------------------- UI
@@ -156,6 +160,7 @@ class CarPlayerActivity : Activity() {
         topBar.addView(iconButton(R.drawable.ic_kg_close, dp(24f).toInt(), 0xFFEEFFFFFF.toInt()) {
             CarPlayerBridge.sendEvent("closed")
             finish()
+            overridePendingTransition(0, 0)
         })
         topBar.addView(View(this), LinearLayout.LayoutParams(0, 1, 1f))
         likeBtn = iconButton(R.drawable.ic_kg_heart_border, dp(26f).toInt(), 0xFFEEFFFFFF.toInt()) {

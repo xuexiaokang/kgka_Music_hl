@@ -258,27 +258,29 @@ class _PlayerBodyState extends State<_PlayerBody> {
     // 横屏分栏布局是车机专属，普通横屏仍用竖屏的翻页布局。
     final isCarLayout = landscape && ThemeController.instance.carModeEnabled;
 
-    // 车机全屏：把整块播放界面交给全原生 CarPlayerActivity 渲染。原生页覆盖
-    // FlutterActivity 后引擎停帧，全屏期间不再有 Flutter 的每帧 surface 交换，
-    // 与酷我原生 HWUI 同路，避免霸占弱车机 GPU 饿死并发浮窗视频。
-    if (isCarLayout &&
-        widget.player.currentSong != null &&
-        !_carHandoff &&
-        !_handoffSuppressed &&
-        !_handoffScheduled) {
-      _handoffScheduled = true;
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (!mounted) return;
-        CarPlayerService.instance.open(widget.player, widget.auth);
-        setState(() => _carHandoff = CarPlayerService.instance.isActive);
-      });
-    }
+    // 离开车机横屏（如旋回竖屏）时，收掉原生页，回落到 Flutter 竖屏播放器。
     if (!isCarLayout && _carHandoff) {
       CarPlayerService.instance.dismissNative();
       CarPlayerService.instance.close();
       _carHandoff = false;
     }
-    if (_carHandoff) {
+    // 车机横屏：Flutter 侧只作为"拉起并承载原生全屏 CarPlayerActivity"的隐形宿主，
+    // 绝不绘制 Flutter 版全屏播放器。原生页覆盖 FlutterActivity 后引擎停帧，全屏期间
+    // 不再有 Flutter 的每帧 surface 交换（与酷我原生 HWUI 同路，避免霸占弱车机 GPU）。
+    // 关键：关闭原生页时 app_shell 的 reverse 动画期间本页仍在树上，若此处仍渲染
+    // _LandscapePlayerContent 就会闪一帧 Flutter 全屏——所以车机下无条件返回纯黑宿主。
+    if (isCarLayout) {
+      if (widget.player.currentSong != null &&
+          !_carHandoff &&
+          !_handoffSuppressed &&
+          !_handoffScheduled) {
+        _handoffScheduled = true;
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted) return;
+          CarPlayerService.instance.open(widget.player, widget.auth);
+          setState(() => _carHandoff = CarPlayerService.instance.isActive);
+        });
+      }
       return const Scaffold(backgroundColor: Colors.black, body: SizedBox.shrink());
     }
 
