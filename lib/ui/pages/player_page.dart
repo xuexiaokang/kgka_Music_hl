@@ -18,6 +18,7 @@ import '../../controllers/player_controller.dart';
 import '../../controllers/theme_controller.dart';
 import '../../models/music_models.dart';
 import '../../services/lyric_converter.dart';
+import '../../services/car_player_service.dart';
 import '../widgets/audio_effects_sheet.dart';
 import '../widgets/audio_quality_sheet.dart';
 import '../widgets/blurred_lyric_view.dart';
@@ -210,11 +211,30 @@ class _PlayerBodyState extends State<_PlayerBody> {
   var _pageScrolling = false;
   bool? _lastSystemUiLandscape;
 
+  // 车机全屏 → 全原生 CarPlayerActivity 接管（Flutter 被覆盖后停帧）
+  bool _carHandoff = false;
+  bool _handoffSuppressed = false; // 用户手动关掉原生页后，本次不再自动接管
+  bool _handoffScheduled = false;
+
   bool get _lyricPageVisible => _page == 1 || _pageScrolling;
+
+  @override
+  void initState() {
+    super.initState();
+    CarPlayerService.instance.onClosed(() {
+      if (!mounted) return;
+      setState(() {
+        _carHandoff = false;
+        _handoffSuppressed = true;
+        _handoffScheduled = false;
+      });
+    });
+  }
 
   @override
   void dispose() {
     _pageController.dispose();
+    CarPlayerService.instance.close();
     super.dispose();
   }
 
@@ -231,6 +251,29 @@ class _PlayerBodyState extends State<_PlayerBody> {
     _syncSystemUi(landscape);
     // 横屏分栏布局是车机专属，普通横屏仍用竖屏的翻页布局。
     final isCarLayout = landscape && ThemeController.instance.carModeEnabled;
+
+    // 车机全屏：把整块播放界面交给全原生 CarPlayerActivity 渲染。原生页覆盖
+    // FlutterActivity 后引擎停帧，全屏期间不再有 Flutter 的每帧 surface 交换，
+    // 与酷我原生 HWUI 同路，避免霸占弱车机 GPU 饿死并发浮窗视频。
+    if (isCarLayout &&
+        widget.player.currentSong != null &&
+        !_carHandoff &&
+        !_handoffSuppressed &&
+        !_handoffScheduled) {
+      _handoffScheduled = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        CarPlayerService.instance.open(widget.player);
+        setState(() => _carHandoff = CarPlayerService.instance.isActive);
+      });
+    }
+    if (!isCarLayout && _carHandoff) {
+      CarPlayerService.instance.close();
+      _carHandoff = false;
+    }
+    if (_carHandoff) {
+      return const Scaffold(backgroundColor: Colors.black, body: SizedBox.shrink());
+    }
 
     return StatusBarOverlay(
       brightness: Brightness.dark,

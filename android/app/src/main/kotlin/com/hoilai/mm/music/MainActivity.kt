@@ -94,6 +94,10 @@ class MainActivity : AudioServiceActivity() {
             CarLyricPlatformViewFactory(flutterEngine.dartExecutor.binaryMessenger)
         )
 
+        // 全原生车机播放器桥接：双向 channel，Dart 调 open 拉起 CarPlayerActivity，
+        // 传输事件经 ka.car_player/flutter 回传 Dart。
+        CarPlayerBridge.init(this, flutterEngine.dartExecutor.binaryMessenger)
+
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "kgka_music_hl/screen")
             .setMethodCallHandler { call, result ->
                 when (call.method) {
