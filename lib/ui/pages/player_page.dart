@@ -1112,19 +1112,9 @@ class _LandscapeLyricPanel extends StatefulWidget {
   State<_LandscapeLyricPanel> createState() => _LandscapeLyricPanelState();
 }
 
-/// 歌词逐字进度刷新节流间隔（毫秒）。
-/// 注意：真正让节流生效的是本地 vendored 的 flutter_lyric —— 原版库内部有个 200ms
-/// AnimationController 补间会顶著歌词区每帧(60fps)重栅格，节流 setProgress 也压不住
-/// （40ms<200ms 时补间永不停），故之前的节流 + A/B 后端切换均无效、浮窗仍掉帧。
-/// fork 已把该补间去掉、高亮宽度按每次 setProgress 直接吸附，于是重栅格频率≈本间隔
-/// 设定的帧率(50ms→~20fps)，且字与字之间空隙宽度不变→不重绘→GPU idle，把渲染时间
-/// 让给并发的浮窗视频。~20fps 对卡拉OK逐字填充肉眼无感。
-const int _kLyricTickIntervalMs = 50;
-
 class _LandscapeLyricPanelState extends State<_LandscapeLyricPanel> {
   late final LyricController _lyricController;
   late final Ticker _ticker;
-  int _lastProgressMs = -1 << 40;
   bool _isUserSelecting = false;
   /// 已加载歌词的快照：用于区分"歌词为空但准备中"与"歌词为空且加载完成"。
   List<LyricLine> _loadedLyrics = const [];
@@ -1212,7 +1202,6 @@ class _LandscapeLyricPanelState extends State<_LandscapeLyricPanel> {
         !widget.player.isScrubbing &&
         !_isUserSelecting;
     if (shouldTick && !_ticker.isActive) {
-      _lastProgressMs = -1 << 40;
       _ticker.start();
     } else if (!shouldTick && _ticker.isActive) {
       _ticker.stop();
@@ -1223,12 +1212,6 @@ class _LandscapeLyricPanelState extends State<_LandscapeLyricPanel> {
     if (!mounted || widget.player.isScrubbing) {
       return;
     }
-    // 节流到 ~25fps：见 _kLyricTickIntervalMs 注释，避免每帧重绘整块歌词区霸占弱 GPU。
-    final ms = elapsed.inMilliseconds;
-    if (ms - _lastProgressMs < _kLyricTickIntervalMs) {
-      return;
-    }
-    _lastProgressMs = ms;
     _lyricController.setProgress(widget.player.smoothPosition);
   }
 
@@ -2063,7 +2046,6 @@ class _LyricViewportState extends State<_LyricViewport> {
 
   late final LyricController _lyricController;
   late final Ticker _ticker;
-  int _lastProgressMs = -1 << 40;
   bool _isUserSelecting = false;
 
   @override
@@ -2132,7 +2114,6 @@ class _LyricViewportState extends State<_LyricViewport> {
         !widget.player.isScrubbing &&
         !_isUserSelecting;
     if (shouldTick && !_ticker.isActive) {
-      _lastProgressMs = -1 << 40;
       _ticker.start();
     } else if (!shouldTick && _ticker.isActive) {
       _ticker.stop();
@@ -2143,12 +2124,6 @@ class _LyricViewportState extends State<_LyricViewport> {
     if (!mounted || widget.player.isScrubbing) {
       return;
     }
-    // 节流到 ~25fps：见 _kLyricTickIntervalMs 注释，避免每帧重绘整块歌词区霸占弱 GPU。
-    final ms = elapsed.inMilliseconds;
-    if (ms - _lastProgressMs < _kLyricTickIntervalMs) {
-      return;
-    }
-    _lastProgressMs = ms;
     _lyricController.setProgress(widget.player.smoothPosition);
   }
 
