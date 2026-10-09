@@ -900,6 +900,9 @@ class CarPlayerActivity : Activity() {
     }
 
     private fun startRotation() {
+        // discGroup 由 buildDisc() 在布局完成后创建；onCreate 期间的同步调用（applyPlayState）
+        // 会早于该时机，此时直接跳过——buildDisc() 末尾会在 playing 时重新触发旋转。
+        if (!::discGroup.isInitialized) return
         if (rotAnimator?.isRunning == true) return
         rotAnimator = ValueAnimator.ofFloat(0f, 360f).apply {
             duration = 32000L
