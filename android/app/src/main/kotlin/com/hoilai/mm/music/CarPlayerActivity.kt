@@ -425,8 +425,8 @@ class CarPlayerActivity : Activity() {
 
         val glow = View(this).apply {
             background = GradientDrawable().apply {
-                type = GradientDrawable.RADIAL_GRADIENT
-                gradientCenterX = 0.5f; gradientCenterY = 0.5f
+                gradientType = GradientDrawable.RADIAL_GRADIENT
+                setGradientCenter(0.5f, 0.5f)
                 gradientRadius = sizePx / 2f
                 setColors(intArrayOf(0xE0FFFFFF.toInt(), 0x94FFFFFF.toInt(), 0x38FFFFFF.toInt()))
             }
