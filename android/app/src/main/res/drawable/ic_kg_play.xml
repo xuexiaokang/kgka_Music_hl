@@ -1,8 +1,8 @@
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="24dp" android:height="24dp"
     android:viewportWidth="24" android:viewportHeight="24">
-    <!-- 圆润加粗播放三角：填充 + 同色圆角描边把尖角磨圆 -->
+    <!-- 圆润加粗播放三角：撑满画布，填充+同色圆角描边磨尖，glyph 相对圆环更大 -->
     <path android:fillColor="#FFFFFFFF" android:strokeColor="#FFFFFFFF"
-        android:strokeWidth="2.6" android:strokeLineJoin="round" android:strokeLineCap="round"
-        android:pathData="M7.5,5 L7.5,19 L19,12 Z"/>
+        android:strokeWidth="3.0" android:strokeLineJoin="round" android:strokeLineCap="round"
+        android:pathData="M6.5,3.8 L6.5,20.2 L20.5,12 Z"/>
 </vector>

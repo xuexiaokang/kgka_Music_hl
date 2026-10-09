@@ -205,7 +205,7 @@ class CarPlayerActivity : Activity() {
             gravity = Gravity.CENTER_VERTICAL
         }
         header.addView(
-            circleIconButton(R.drawable.ic_kg_chevron_left, 34f, 44f, R.drawable.bg_circle_white12) {
+            circleIconButton(R.drawable.ic_kg_chevron_left, 40f, 44f, R.drawable.bg_circle_white12) {
                 CarPlayerBridge.sendEvent("closed"); finish(); overridePendingTransition(0, 0)
             },
             lp(dp(44f).toInt(), dp(44f).toInt())
@@ -220,12 +220,12 @@ class CarPlayerActivity : Activity() {
         hcol.addView(headerTitle, lpMatchWrap())
         hcol.addView(headerArtist, lpMatchWrap())
         header.addView(hcol, lpWeight(1f))
-        likeBtn = circleIconButton(R.drawable.ic_kg_heart_border, 24f, 44f, R.drawable.bg_circle_white12) {
+        likeBtn = circleIconButton(R.drawable.ic_kg_heart_border, 32f, 44f, R.drawable.bg_circle_white12) {
             CarPlayerBridge.sendEvent("like")
         }
         header.addView(likeBtn, lp(dp(44f).toInt(), dp(44f).toInt()))
         header.addView(space(dp(8f).toInt(), 0))
-        moreBtn = circleIconButton(R.drawable.ic_kg_more_horiz, 24f, 44f, R.drawable.bg_circle_white12) {
+        moreBtn = circleIconButton(R.drawable.ic_kg_more_horiz, 32f, 44f, R.drawable.bg_circle_white12) {
             showMoreSheet()
         }
         header.addView(moreBtn, lp(dp(44f).toInt(), dp(44f).toInt()))
@@ -338,7 +338,7 @@ class CarPlayerActivity : Activity() {
             setImageResource(R.drawable.ic_kg_play)
             setColorFilter(0xFFFFFFFF.toInt())
             scaleType = ImageView.ScaleType.CENTER_INSIDE
-            val pad = dp(6f).toInt()
+            val pad = dp(3f).toInt()
             setPadding(pad, pad, pad, pad)
             setOnClickListener { CarPlayerBridge.sendEvent("playPause") }
         }

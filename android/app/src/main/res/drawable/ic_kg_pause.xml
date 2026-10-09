@@ -1,9 +1,9 @@
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="24dp" android:height="24dp"
     android:viewportWidth="24" android:viewportHeight="24">
-    <!-- 粗线条圆头暂停：两条竖线撑满画布，round cap -->
-    <path android:strokeColor="#FFFFFFFF" android:strokeWidth="3.8"
-        android:strokeLineCap="round" android:pathData="M8.5,5 V19"/>
-    <path android:strokeColor="#FFFFFFFF" android:strokeWidth="3.8"
-        android:strokeLineCap="round" android:pathData="M15.5,5 V19"/>
+    <!-- 粗线条圆头暂停：两条竖线撑满画布，glyph 相对圆环更大 -->
+    <path android:strokeColor="#FFFFFFFF" android:strokeWidth="4.4"
+        android:strokeLineCap="round" android:pathData="M8,3.5 V20.5"/>
+    <path android:strokeColor="#FFFFFFFF" android:strokeWidth="4.4"
+        android:strokeLineCap="round" android:pathData="M16,3.5 V20.5"/>
 </vector>
