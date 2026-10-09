@@ -277,7 +277,20 @@ class _PlayerBodyState extends State<_PlayerBody> {
         _handoffScheduled = true;
         WidgetsBinding.instance.addPostFrameCallback((_) {
           if (!mounted) return;
-          CarPlayerService.instance.open(widget.player, widget.auth);
+          final cs = Theme.of(context).colorScheme;
+          CarPlayerService.instance.open(
+            widget.player,
+            widget.auth,
+            theme: {
+              'isDark': Theme.of(context).brightness == Brightness.dark,
+              'surface': cs.surface.value,
+              'primary': cs.primary.value,
+              'onSurface': cs.onSurface.value,
+              'onSurfaceVariant': cs.onSurfaceVariant.value,
+              'outlineVariant': cs.outlineVariant.value,
+              'error': cs.error.value,
+            },
+          );
           setState(() => _carHandoff = CarPlayerService.instance.isActive);
         });
       }

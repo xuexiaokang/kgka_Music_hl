@@ -29,16 +29,19 @@ class CarPlayerService {
   bool _handlerBound = false;
   String _lastSongKey = '';
   String _lastMetaSig = '';
+  Map<String, Object?>? _theme;
   void Function()? _onClosed;
 
   bool get isActive => _active;
 
   void onClosed(void Function() cb) => _onClosed = cb;
 
-  Future<void> open(PlayerController player, AuthController auth) async {
+  Future<void> open(PlayerController player, AuthController auth,
+      {Map<String, Object?>? theme}) async {
     if (_active) return;
     _player = player;
     _auth = auth;
+    _theme = theme;
     if (!_handlerBound) {
       _fromNative.setMethodCallHandler(_onNativeCall);
       _handlerBound = true;
@@ -93,6 +96,7 @@ class CarPlayerService {
   Map<String, dynamic> _payload(PlayerController p) => {
         'meta': _metaMap(p),
         'styles': _styles(),
+        'theme': _theme ?? const <String, Object?>{},
         'lyrics': {'lines': _encodeLyrics(p.lyrics)},
         'transport': _transportMap(p),
       };
@@ -141,6 +145,7 @@ class CarPlayerService {
           'index': i,
           'title': p.queue[i].title,
           'artist': p.queue[i].artist,
+          'coverUrl': p.queue[i].coverUrl,
           'active': cur != null && p.queue[i].hash == cur.hash,
         },
     ];
@@ -261,6 +266,13 @@ class CarPlayerService {
         final idx = (args?['index'] as num?)?.toInt() ?? -1;
         if (p != null && idx >= 0 && idx < p.queue.length) {
           await p.playSong(p.queue[idx], queue: p.queue);
+        }
+        break;
+      case 'clearQueue':
+        final cur = p?.currentSong;
+        if (p != null && cur != null && p.queue.length > 1) {
+          await p.playSong(cur, queue: [cur]);
+          _pushMeta();
         }
         break;
       case 'setSpeed':

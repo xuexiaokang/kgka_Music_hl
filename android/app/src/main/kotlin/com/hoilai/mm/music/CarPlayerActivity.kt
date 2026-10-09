@@ -64,7 +64,11 @@ class CarPlayerActivity : Activity() {
     private lateinit var moreBtn: ImageButton
     private lateinit var queueOverlay: FrameLayout
     private lateinit var queueList: LinearLayout
-    private lateinit var queueHeader: TextView
+    private lateinit var queueCountText: TextView
+    private lateinit var queueClearBtn: TextView
+    private lateinit var queueTitleText: TextView
+    private lateinit var queuePanelBg: GradientDrawable
+    private lateinit var queueHandleBg: GradientDrawable
     private var sheet: FrameLayout? = null
 
     private var rotAnimator: ValueAnimator? = null
@@ -98,6 +102,14 @@ class CarPlayerActivity : Activity() {
     private var sleepActive = false
     private var sleepFinishCurrent = false
     private var sleepRemainingMs: Long? = null
+
+    // 队列底部弹窗主题色（对齐 Flutter showModalBottomSheet 的 colorScheme，默认浅色）
+    private var thSurface = 0xFFFFFFFF.toInt()
+    private var thPrimary = 0xFF1478FF.toInt()
+    private var thOnSurface = 0xFF080B12.toInt()
+    private var thOnSurfaceVariant = 0xFF6F7785.toInt()
+    private var thOutlineVariant = 0xFFE7EDF7.toInt()
+    private var thError = 0xFFB3261E.toInt()
 
     private var clockStarted = false
     private val frameCb = object : Choreographer.FrameCallback {
@@ -502,23 +514,78 @@ class CarPlayerActivity : Activity() {
                 FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT
             )
         }
+        // 底部弹窗面板：surface 底色 + 顶部 28dp 圆角（对齐 Flutter showModalBottomSheet）
+        queuePanelBg = GradientDrawable().apply {
+            shape = GradientDrawable.RECTANGLE
+            setColor(thSurface)
+            // 左上/右上圆角 28dp，底部直角
+            val rad = dp(28f)
+            cornerRadii = floatArrayOf(rad, rad, rad, rad, 0f, 0f, 0f, 0f)
+        }
         val panel = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            background = resources.getDrawable(R.drawable.kg_queue_panel_bg, null)
-            setPadding(dp(20f).toInt(), dp(14f).toInt(), dp(20f).toInt(), dp(8f).toInt())
+            background = queuePanelBg
+            val padX = dp(16f).toInt()
+            setPadding(padX, 0, padX, dp(18f).toInt())
             layoutParams = FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.MATCH_PARENT, dp(320f).toInt()
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                (resources.displayMetrics.heightPixels * 0.62f).toInt()
             ).also { it.gravity = Gravity.BOTTOM }
             isClickable = true
         }
-        queueHeader = TextView(this).apply {
-            setTextColor(Color.WHITE); textSize = 16f
-            setTypeface(typeface, android.graphics.Typeface.BOLD)
-            setPadding(0, 0, 0, dp(8f).toInt())
+        // 拖拽把手胶囊 32x4dp（对齐 showDragHandle）
+        queueHandleBg = GradientDrawable().apply {
+            shape = GradientDrawable.RECTANGLE
+            setColor(thOutlineVariant)
+            cornerRadius = dp(2f)
         }
-        panel.addView(queueHeader)
+        panel.addView(View(this).apply {
+            background = queueHandleBg
+            layoutParams = LinearLayout.LayoutParams(dp(32f).toInt(), dp(4f).toInt()).also {
+                it.gravity = Gravity.CENTER_HORIZONTAL; it.topMargin = dp(10f).toInt(); it.bottomMargin = dp(10f).toInt()
+            }
+        })
+        // 头部行：播放队列 + N 首 + 清空
+        val header = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
+            ).also { it.bottomMargin = dp(10f).toInt() }
+        }
+        header.addView(TextView(this).apply {
+            text = "播放队列"
+            setTextColor(thOnSurface); textSize = 20f
+            setTypeface(typeface, android.graphics.Typeface.BOLD)
+        }.also { queueTitleText = it })
+        header.addView(TextView(this).apply {
+            text = ""; setTextColor(thOnSurfaceVariant); textSize = 14f
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT
+            ).also { it.marginStart = dp(8f).toInt() }
+        }.also { queueCountText = it })
+        header.addView(View(this).apply {
+            layoutParams = LinearLayout.LayoutParams(0, 1, 1f)
+        })
+        header.addView(TextView(this).apply {
+            text = "清空"
+            setTextColor(thError); textSize = 15f
+            setTypeface(typeface, android.graphics.Typeface.BOLD)
+            setPadding(dp(10f).toInt(), dp(6f).toInt(), dp(2f).toInt(), dp(6f).toInt())
+            isClickable = true
+            setOnClickListener {
+                if (queueCountText.tag == true) {
+                    CarPlayerBridge.sendEvent("clearQueue", emptyMap<String, Any>())
+                }
+            }
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT
+            )
+        }.also { queueClearBtn = it })
+        panel.addView(header)
+        // 列表
         queueList = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        val scroll = ScrollView(this)
+        val scroll = ScrollView(this).apply { isVerticalScrollBarEnabled = false }
         scroll.addView(queueList, LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
         panel.addView(scroll, LinearLayout.LayoutParams(
@@ -530,35 +597,54 @@ class CarPlayerActivity : Activity() {
 
     private fun rebuildQueue(items: List<Map<*, *>>) {
         queueList.removeAllViews()
-        queueHeader.text = "播放列表 · ${items.size} 首"
+        val canClear = items.size > 1
+        queueCountText.text = "${items.size} 首"
+        queueCountText.tag = canClear
+        queueClearBtn.alpha = if (canClear) 1f else 0.4f
         items.forEachIndexed { i, m ->
             val active = m["active"] == true
             val title = (m["title"] as? String) ?: ""
             val artist = (m["artist"] as? String) ?: ""
+            val coverUrl = (m["coverUrl"] as? String)
             val row = LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
-                setPadding(dp(4f).toInt(), dp(12f).toInt(), dp(4f).toInt(), dp(12f).toInt())
+                setPadding(0, dp(9f).toInt(), 0, dp(9f).toInt())
                 layoutParams = LinearLayout.LayoutParams(
                     LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
             }
-            val idx = TextView(this).apply {
-                text = (i + 1).toString()
-                setTextColor(if (active) ACCENT else 0xFF8A8A90.toInt())
-                textSize = 13f
-                gravity = Gravity.CENTER
+            // 封面缩略图 40dp，圆角 8（预渲染，无索引号）
+            val thumb = ImageView(this).apply {
+                scaleType = ImageView.ScaleType.FIT_XY
+                setColorFilter(thPrimary)
             }
-            row.addView(idx, LinearLayout.LayoutParams(dp(30f).toInt(), LinearLayout.LayoutParams.WRAP_CONTENT))
+            row.addView(thumb, LinearLayout.LayoutParams(dp(40f).toInt(), dp(40f).toInt()).also {
+                it.marginEnd = dp(14f).toInt()
+            })
+            loadThumb(thumb, coverUrl)
             val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
             col.addView(TextView(this).apply {
                 text = title; maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END
-                setTextColor(if (active) ACCENT else Color.WHITE); textSize = 15f
+                setTextColor(if (active) thPrimary else thOnSurface); textSize = 15f
+                if (active) setTypeface(typeface, android.graphics.Typeface.BOLD)
             })
             col.addView(TextView(this).apply {
                 text = artist; maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END
-                setTextColor(0xFF9A9AA0.toInt()); textSize = 12f
+                setTextColor(if (active) thPrimary else thOnSurfaceVariant); textSize = 13f
+                layoutParams = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
+                ).also { it.topMargin = dp(2f).toInt() }
             })
             row.addView(col, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+            // 当前曲尾部图标：播放中=均衡器，暂停=暂停键（对齐 Flutter）
+            if (active) {
+                row.addView(ImageView(this).apply {
+                    setImageResource(if (playing) R.drawable.ic_kg_equalizer else R.drawable.ic_kg_pause)
+                    setColorFilter(thPrimary)
+                }, LinearLayout.LayoutParams(dp(24f).toInt(), dp(24f).toInt()).also {
+                    it.marginStart = dp(8f).toInt()
+                })
+            }
             row.setOnClickListener {
                 CarPlayerBridge.sendEvent("playQueueIndex", mapOf("index" to i))
                 hideQueue()
@@ -567,7 +653,65 @@ class CarPlayerActivity : Activity() {
         }
     }
 
-    private fun showQueue() { queueOverlay.visibility = View.VISIBLE }
+    /** 中心裁剪成正方形 + 圆角(边长 20%)抗锯齿，供队列缩略图使用。 */
+    private fun roundedSquare(src: Bitmap): Bitmap {
+        val side = min(src.width, src.height)
+        if (side <= 0) return src
+        val sx = (src.width - side) / 2f
+        val sy = (src.height - side) / 2f
+        val n = (side * 2).coerceIn(120, 400) // 2x 超采样取 AA 边缘
+        val out = Bitmap.createBitmap(n, n, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(out)
+        val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
+        val shader = BitmapShader(src, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP)
+        val scale = n.toFloat() / side
+        val m = Matrix()
+        m.setTranslate(-sx * scale, -sy * scale)
+        m.postScale(scale, scale)
+        shader.setLocalMatrix(m)
+        paint.shader = shader
+        val r = n * 0.2f // 对齐 Flutter 圆角 8 / 尺寸 40
+        canvas.drawRoundRect(0f, 0f, n.toFloat(), n.toFloat(), r, r, paint)
+        return out
+    }
+
+    /** 异步加载队列缩略图（复用 HttpURLConnection+BitmapFactory，解码小图后圆角化）。 */
+    private fun loadThumb(iv: ImageView, url: String?) {
+        if (url.isNullOrBlank()) return
+        Thread {
+            try {
+                val conn = java.net.URL(url).openConnection() as java.net.HttpURLConnection
+                conn.connectTimeout = 8000; conn.readTimeout = 8000
+                conn.inputStream.use { ins ->
+                    val bytes = ins.readBytes()
+                    val opts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                    BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts)
+                    var sample = 1
+                    val target = 160
+                    while (max(opts.outWidth, opts.outHeight) / (sample * 2) >= target) sample *= 2
+                    val real = BitmapFactory.Options().apply { inSampleSize = sample }
+                    val bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, real)
+                    if (bmp != null && !isFinishing) {
+                        val rounded = roundedSquare(bmp)
+                        runOnUiThread { if (!isFinishing) iv.setImageBitmap(rounded) }
+                    }
+                }
+                conn.disconnect()
+            } catch (_: Exception) {
+                // 缩略图失败留空即可，不影响列表
+            }
+        }.start()
+    }
+
+    private fun showQueue() {
+        // 主题快照在 buildUi 之后才到，显示前按当前 th* 重刷静态装饰色
+        queuePanelBg.setColor(thSurface)
+        queueHandleBg.setColor(thOutlineVariant)
+        queueTitleText.setTextColor(thOnSurface)
+        queueCountText.setTextColor(thOnSurfaceVariant)
+        queueClearBtn.setTextColor(thError)
+        queueOverlay.visibility = View.VISIBLE
+    }
     private fun hideQueue() { queueOverlay.visibility = View.GONE }
 
     // --------------------------------------------------------- 更多面板
@@ -730,6 +874,14 @@ class CarPlayerActivity : Activity() {
     // --------------------------------------------------------- 快照/事件
 
     private fun applySnapshot(m: Map<*, *>) {
+        (m["theme"] as? Map<*, *>)?.let { t ->
+            (t["surface"] as? Number)?.let { thSurface = it.toInt() }
+            (t["primary"] as? Number)?.let { thPrimary = it.toInt() }
+            (t["onSurface"] as? Number)?.let { thOnSurface = it.toInt() }
+            (t["onSurfaceVariant"] as? Number)?.let { thOnSurfaceVariant = it.toInt() }
+            (t["outlineVariant"] as? Number)?.let { thOutlineVariant = it.toInt() }
+            (t["error"] as? Number)?.let { thError = it.toInt() }
+        }
         (m["styles"] as? Map<*, *>)?.let { lyricView.setStyles(it) }
         (m["meta"] as? Map<*, *>)?.let { onMeta(it) }
         (m["lyrics"] as? Map<*, *>)?.let { onLyrics(it) }
