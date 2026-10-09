@@ -337,7 +337,7 @@ class CarPlayerActivity : Activity() {
             setBackgroundResource(R.drawable.bg_circle_white18)
             setImageResource(R.drawable.ic_kg_play)
             setColorFilter(0xFFFFFFFF.toInt())
-            scaleType = ImageView.ScaleType.CENTER_INSIDE
+            scaleType = ImageView.ScaleType.FIT_CENTER
             val pad = dp(3f).toInt()
             setPadding(pad, pad, pad, pad)
             setOnClickListener { CarPlayerBridge.sendEvent("playPause") }
@@ -391,7 +391,8 @@ class CarPlayerActivity : Activity() {
             if (bgRes != 0) setBackgroundResource(bgRes) else setBackgroundColor(Color.TRANSPARENT)
             setImageResource(resId)
             setColorFilter(0xFFFFFFFF.toInt())
-            scaleType = ImageView.ScaleType.CENTER_INSIDE
+            // FIT_CENTER 才会把矢量按 padding 后的盒放大绘制；CENTER_INSIDE 只按 intrinsic(24dp) 显示、不会放大
+            scaleType = ImageView.ScaleType.FIT_CENTER
             val pad = ((s - icon) / 2).coerceAtLeast(0)
             setPadding(pad, pad, pad, pad)
             contentDescription = null
