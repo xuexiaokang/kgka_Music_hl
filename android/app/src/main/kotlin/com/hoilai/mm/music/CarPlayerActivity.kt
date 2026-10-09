@@ -110,6 +110,8 @@ class CarPlayerActivity : Activity() {
     private var thOnSurfaceVariant = 0xFF6F7785.toInt()
     private var thOutlineVariant = 0xFFE7EDF7.toInt()
     private var thError = 0xFFB3261E.toInt()
+    private var thSurfaceContainer = 0xFFF1F3F8.toInt()
+    private var thSurfaceContainerHighest = 0xFFE3E7EF.toInt()
 
     private var clockStarted = false
     private val frameCb = object : Choreographer.FrameCallback {
@@ -805,16 +807,82 @@ class CarPlayerActivity : Activity() {
         sheet = null
     }
 
+    /** 更多面板的一枚网格磁贴。 */
+    private class Tile(val icon: Int, val title: String, val subtitle: String?, val onClick: () -> Unit)
+
+    /** 更多面板：左侧滑入圆角卡片 + 关闭X + 曲名头 + 2 列网格磁贴（对齐 Flutter 车机版）。 */
     private fun showMoreSheet() {
-        val rows = ArrayList<Row>()
-        rows.add(Row("倍速播放", speedLabel) {
+        closeSheet()
+        val scrim = FrameLayout(this).apply {
+            setBackgroundColor(0x80000000.toInt())
+            isClickable = true
+            setOnClickListener { closeSheet() }
+            layoutParams = FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT
+            )
+        }
+        val card = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.RECTANGLE
+                setColor(thSurface)
+                cornerRadius = dp(16f)
+            }
+            val pad = dp(16f).toInt()
+            setPadding(pad, pad, pad, pad)
+            layoutParams = FrameLayout.LayoutParams(
+                dp(320f).toInt(), FrameLayout.LayoutParams.MATCH_PARENT
+            ).also {
+                it.gravity = Gravity.START or Gravity.CENTER_VERTICAL
+                it.marginStart = dp(24f).toInt(); it.topMargin = dp(24f).toInt(); it.bottomMargin = dp(24f).toInt()
+            }
+            isClickable = true
+        }
+        // 头部：关闭 X + 曲名/艺人
+        val header = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        val closeColor = (thSurfaceContainerHighest and 0x00FFFFFF) or (0x80 shl 24)
+        header.addView(ImageButton(this).apply {
+            setImageResource(R.drawable.ic_kg_close)
+            setColorFilter(thOnSurface)
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.OVAL; setColor(closeColor)
+            }
+            scaleType = ImageView.ScaleType.CENTER_INSIDE
+            setPadding(dp(9f).toInt(), dp(9f).toInt(), dp(9f).toInt(), dp(9f).toInt())
+            setOnClickListener { closeSheet() }
+        }, LinearLayout.LayoutParams(dp(40f).toInt(), dp(40f).toInt()))
+        header.addView(LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            addView(TextView(this@CarPlayerActivity).apply {
+                text = headerTitle.text; maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END
+                setTextColor(thOnSurface); textSize = 17f
+                setTypeface(typeface, android.graphics.Typeface.BOLD)
+            })
+            addView(TextView(this@CarPlayerActivity).apply {
+                text = headerArtist.text; maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END
+                setTextColor(thOnSurfaceVariant); textSize = 12f
+            }, LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
+            ).also { it.topMargin = dp(2f).toInt() })
+        }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).also {
+            it.marginStart = dp(12f).toInt()
+        })
+        card.addView(header)
+        card.addView(View(this), LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT, dp(20f).toInt()))
+        // 磁贴列表（2 列网格，行内等宽 + 10dp 间距，磁贴高≈宽/1.35）
+        val tiles = ArrayList<Tile>()
+        tiles.add(Tile(R.drawable.ic_ms_speed, "倍速播放", speedLabel) {
             openSheet("倍速播放", listOf(0.5, 0.75, 1.0, 1.25, 1.5, 2.0).map { v ->
                 Row(speedText(v), selected = kotlin.math.abs(v - speed) < 0.001) {
                     CarPlayerBridge.sendEvent("setSpeed", mapOf("speed" to v)); closeSheet()
                 }
             })
         })
-        rows.add(Row("音质", qualityLabel) {
+        tiles.add(Tile(R.drawable.ic_ms_high_quality, "音质：$qualityLabel", "切换当前播放音质") {
             val opts = listOf("标准音质", "高品音质", "无损音质")
             openSheet("切换音质", opts.mapIndexed { i, name ->
                 Row(name, selected = i == qualityIndex) {
@@ -822,8 +890,11 @@ class CarPlayerActivity : Activity() {
                 }
             })
         })
+        tiles.add(Tile(R.drawable.ic_ms_auto_awesome, "试听高潮", "播放歌曲高潮片段") {
+            CarPlayerBridge.sendEvent("climax")
+        })
         if (effectsSupported && effectNames.isNotEmpty()) {
-            rows.add(Row("音效", effectLabel) {
+            tiles.add(Tile(R.drawable.ic_ms_graphic_eq, "音效", effectLabel) {
                 openSheet("音效", effectNames.map { name ->
                     Row(name, selected = effectLabel.contains(name)) {
                         CarPlayerBridge.sendEvent("setEffect", mapOf("name" to name)); closeSheet()
@@ -831,13 +902,10 @@ class CarPlayerActivity : Activity() {
                 })
             })
         }
-        rows.add(Row("试听高潮", null) {
-            CarPlayerBridge.sendEvent("climax"); closeSheet()
+        tiles.add(Tile(R.drawable.ic_ms_playlist_add, "下一首播放", "添加到播放队列") {
+            CarPlayerBridge.sendEvent("playNext")
         })
-        rows.add(Row("下一首播放", null) {
-            CarPlayerBridge.sendEvent("playNext"); closeSheet()
-        })
-        rows.add(Row("定时播放", sleepSubtitle()) {
+        tiles.add(Tile(R.drawable.ic_ms_bedtime, "定时播放", sleepSubtitle()) {
             openSheet("定时播放", listOf(
                 Row("不开启", selected = !sleepActive) {
                     CarPlayerBridge.sendEvent("sleepTimer", mapOf("minutes" to 0)); closeSheet()
@@ -853,11 +921,73 @@ class CarPlayerActivity : Activity() {
             ))
         })
         if (desktopLyricsSupported) {
-            rows.add(Row("桌面歌词", if (desktopLyricsEnabled) "已开启" else "已关闭") {
-                CarPlayerBridge.sendEvent("toggleDesktopLyrics"); closeSheet()
+            tiles.add(Tile(R.drawable.ic_ms_lyrics, "桌面歌词",
+                if (desktopLyricsEnabled) "已开启" else "已关闭") {
+                CarPlayerBridge.sendEvent("toggleDesktopLyrics")
             })
         }
-        openSheet("更多", rows)
+        val grid = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        var i = 0
+        while (i < tiles.size) {
+            val rowLl = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+            rowLl.addView(buildMoreTile(tiles[i]), LinearLayout.LayoutParams(0, dp(100f).toInt(), 1f))
+            if (i + 1 < tiles.size) {
+                rowLl.addView(buildMoreTile(tiles[i + 1]), LinearLayout.LayoutParams(0, dp(100f).toInt(), 1f).also {
+                    it.marginStart = dp(10f).toInt()
+                })
+            } else {
+                rowLl.addView(View(this), LinearLayout.LayoutParams(0, dp(100f).toInt(), 1f).also {
+                    it.marginStart = dp(10f).toInt()
+                })
+            }
+            grid.addView(rowLl, LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
+            ).also { it.bottomMargin = dp(10f).toInt() })
+            i += 2
+        }
+        val scroll = ScrollView(this).apply { isVerticalScrollBarEnabled = false }
+        scroll.addView(grid, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
+        card.addView(scroll, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f))
+        scrim.addView(card)
+        root.addView(scrim)
+        sheet = scrim
+    }
+
+    /** 单枚磁贴：圆角 surfaceContainer 底 + 居中(图标/标题/副标题)。 */
+    private fun buildMoreTile(t: Tile): LinearLayout {
+        val v = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.RECTANGLE
+                setColor(thSurfaceContainer)
+                cornerRadius = dp(16f)
+            }
+            setPadding(dp(8f).toInt(), dp(6f).toInt(), dp(8f).toInt(), dp(6f).toInt())
+            isClickable = true
+            setOnClickListener { closeSheet(); t.onClick() }
+        }
+        v.addView(ImageView(this).apply {
+            setImageResource(t.icon); setColorFilter(thOnSurface)
+        }, LinearLayout.LayoutParams(dp(24f).toInt(), dp(24f).toInt()))
+        v.addView(TextView(this).apply {
+            text = t.title; maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END
+            gravity = Gravity.CENTER; setTextColor(thOnSurface); textSize = 13f
+            setTypeface(typeface, android.graphics.Typeface.BOLD)
+        }, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
+        ).also { it.topMargin = dp(6f).toInt() })
+        if (t.subtitle != null) {
+            v.addView(TextView(this).apply {
+                text = t.subtitle; maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END
+                gravity = Gravity.CENTER; setTextColor(thOnSurfaceVariant); textSize = 10f
+            }, LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
+            ).also { it.topMargin = dp(2f).toInt() })
+        }
+        return v
     }
 
     private fun speedText(v: Double): String =
@@ -881,6 +1011,8 @@ class CarPlayerActivity : Activity() {
             (t["onSurfaceVariant"] as? Number)?.let { thOnSurfaceVariant = it.toInt() }
             (t["outlineVariant"] as? Number)?.let { thOutlineVariant = it.toInt() }
             (t["error"] as? Number)?.let { thError = it.toInt() }
+            (t["surfaceContainer"] as? Number)?.let { thSurfaceContainer = it.toInt() }
+            (t["surfaceContainerHighest"] as? Number)?.let { thSurfaceContainerHighest = it.toInt() }
         }
         (m["styles"] as? Map<*, *>)?.let { lyricView.setStyles(it) }
         (m["meta"] as? Map<*, *>)?.let { onMeta(it) }

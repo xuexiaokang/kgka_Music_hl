@@ -289,6 +289,8 @@ class _PlayerBodyState extends State<_PlayerBody> {
               'onSurfaceVariant': cs.onSurfaceVariant.value,
               'outlineVariant': cs.outlineVariant.value,
               'error': cs.error.value,
+              'surfaceContainer': cs.surfaceContainer.value,
+              'surfaceContainerHighest': cs.surfaceContainerHighest.value,
             },
           );
           setState(() => _carHandoff = CarPlayerService.instance.isActive);
