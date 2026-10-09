@@ -3,6 +3,6 @@
     android:viewportWidth="24" android:viewportHeight="24">
     <!-- Material play_arrow（填充路径，em 框内留白，比例对齐 Flutter） -->
     <path android:fillColor="#FFFFFFFF" android:strokeColor="#FFFFFFFF"
-        android:strokeWidth="1.5" android:strokeLinejoin="round" android:strokeLineCap="round"
+        android:strokeWidth="1.5" android:strokeLineJoin="round" android:strokeLineCap="round"
         android:pathData="M8,5v14l11,-7z"/>
 </vector>

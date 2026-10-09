@@ -3,6 +3,6 @@
     android:viewportWidth="24" android:viewportHeight="24">
     <!-- Material keyboard_arrow_left（返回，填充路径） -->
     <path android:fillColor="#FFFFFFFF" android:strokeColor="#FFFFFFFF"
-        android:strokeWidth="1.5" android:strokeLinejoin="round" android:strokeLineCap="round"
+        android:strokeWidth="1.5" android:strokeLineJoin="round" android:strokeLineCap="round"
         android:pathData="M15.41,16.09l-4.59,-4.59 4.59,-4.59L14,5.5l-6,6 6,6z"/>
 </vector>
