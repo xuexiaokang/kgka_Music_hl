@@ -436,6 +436,8 @@ class CarPlayerActivity : Activity() {
                     outline.setOval(0, 0, view.width, view.height)
                 }
             }
+            // 裁剪成圆形：否则方形 View 的径向渐变四角与矩形投影会随旋转露出"歪方块"。
+            clipToOutline = true
         }
         discGroup.addView(glow, FrameLayout.LayoutParams(sizePx, sizePx, Gravity.CENTER))
 
