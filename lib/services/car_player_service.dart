@@ -28,6 +28,7 @@ class CarPlayerService {
   bool _active = false;
   bool _handlerBound = false;
   String _lastSongKey = '';
+  String _lastMetaSig = '';
   void Function()? _onClosed;
 
   bool get isActive => _active;
@@ -44,6 +45,7 @@ class CarPlayerService {
     }
     _active = true;
     _lastSongKey = _songKey(player);
+    _lastMetaSig = _metaSig(player);
     player.addListener(_onPlayerChanged);
     try {
       await _toNative.invokeMethod<void>('open', _payload(player));
@@ -75,6 +77,18 @@ class CarPlayerService {
     final s = p.currentSong;
     return s == null ? '' : '${s.hash}|${s.id}|${p.lyrics.length}';
   }
+
+  /// "更多"面板相关状态签名：任一变化即需把 meta 重推给原生以刷新勾选/副标题。
+  String _metaSig(PlayerController p) => [
+        p.isSleepTimerActive,
+        p.isSleepFinishCurrentSong,
+        p.sleepTimerRemaining?.inSeconds,
+        p.audioEffectsLabel,
+        p.audioQuality.index,
+        p.playbackSpeed,
+        p.desktopLyricsEnabled,
+        p.climax?.startTime.inMilliseconds,
+      ].join('|');
 
   Map<String, dynamic> _payload(PlayerController p) => {
         'meta': _metaMap(p),
@@ -185,10 +199,15 @@ class CarPlayerService {
     final p = _player;
     if (p == null) return;
     final key = _songKey(p);
+    final sig = _metaSig(p);
     if (key != _lastSongKey) {
       _lastSongKey = key;
+      _lastMetaSig = sig;
       _toNative.invokeMethod<void>('meta', _metaMap(p));
       _toNative.invokeMethod<void>('lyrics', {'lines': _encodeLyrics(p.lyrics)});
+    } else if (sig != _lastMetaSig) {
+      _lastMetaSig = sig;
+      _toNative.invokeMethod<void>('meta', _metaMap(p));
     }
     _pushSync();
   }
@@ -267,6 +286,8 @@ class CarPlayerService {
         if (p != null && name != null) {
           final preset = PlayerController.equalizerPresets
               .firstWhere((e) => e.name == name, orElse: () => PlayerController.equalizerPresets.first);
+          // 车机面板无独立 EQ 开关：选预设即视为开启均衡器，否则 applyEqualizerPreset 不会下发到音频。
+          await p.setEqualizerEnabled(true);
           await p.applyEqualizerPreset(preset);
           _pushMeta();
         }
@@ -289,7 +310,7 @@ class CarPlayerService {
           if (minutes <= 0 && !finishCurrent) {
             p.cancelSleepTimer();
           } else if (finishCurrent) {
-            p.setSleepTimer(const Duration(milliseconds: 1), finishCurrentSong: true);
+            p.setSleepFinishCurrentSongNow();
           } else {
             p.setSleepTimer(Duration(minutes: minutes));
           }
@@ -303,11 +324,12 @@ class CarPlayerService {
         }
         break;
       case 'playNext':
-        final song = p?.currentSong;
-        if (p != null && song != null) {
-          await p.addToQueue(song);
+        if (p != null) {
+          final ok = await p.playCurrentSongNext();
           _pushMeta();
-          _toNative.invokeMethod<void>('toast', {'text': '已添加到下一首播放'});
+          _toNative.invokeMethod<void>('toast', {
+            'text': ok ? '已添加到下一首播放' : '添加失败',
+          });
         }
         break;
       case 'requestSync':
