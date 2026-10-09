@@ -930,7 +930,7 @@ class CarPlayerActivity : Activity() {
         bgView.background = GradientDrawable(
             GradientDrawable.Orientation.TOP_BOTTOM,
             // 竖向 scrim [.32,.56,.82] 叠加 Flutter 的整屏 flat black .12（按 alpha 合成 a+.12*(1-a)）
-            intArrayOf(0x67000000, 0x9D000000, 0xD7000000.toInt())
+            intArrayOf(0x67000000, 0x9D000000.toInt(), 0xD7000000.toInt())
         )
     }
 
