@@ -615,10 +615,9 @@ class CarPlayerActivity : Activity() {
                 layoutParams = LinearLayout.LayoutParams(
                     LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
             }
-            // 封面缩略图 40dp，圆角 8（预渲染，无索引号）
+            // 封面缩略图 40dp，圆角 8（预渲染，无索引号；显示真实封面，不做着色）
             val thumb = ImageView(this).apply {
                 scaleType = ImageView.ScaleType.FIT_XY
-                setColorFilter(thPrimary)
             }
             row.addView(thumb, LinearLayout.LayoutParams(dp(40f).toInt(), dp(40f).toInt()).also {
                 it.marginEnd = dp(14f).toInt()
