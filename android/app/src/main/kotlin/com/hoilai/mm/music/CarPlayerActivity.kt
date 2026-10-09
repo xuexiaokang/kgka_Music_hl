@@ -249,10 +249,8 @@ class CarPlayerActivity : Activity() {
         }
         titleText = marqueeText(22f, 0xEBFFFFFF.toInt(), true).apply { gravity = Gravity.CENTER }
         artistText = marqueeText(14f, 0x99FFFFFF.toInt(), false).apply { gravity = Gravity.CENTER }
-        right.addView(titleText, lpMatchWrap().also { it.topMargin = dp(6f).toInt() })
-        right.addView(space(0, dp(4f).toInt()))
-        right.addView(artistText, lpMatchWrap())
-        right.addView(space(0, dp(12f).toInt()))
+        // 曲名/歌手已在左上角顶栏显示，右侧不再重复；此处仅留少量顶部间距给歌词。
+        right.addView(space(0, dp(8f).toInt()))
 
         lyricView = CarLyricView(this).apply {
             setBackgroundColor(Color.TRANSPARENT)
@@ -270,6 +268,7 @@ class CarPlayerActivity : Activity() {
         val seekWrap = FrameLayout(this)
         seek = SeekBar(this).apply {
             max = 1
+            maxHeight = dp(3f).toInt()
             progressDrawable = resources.getDrawable(R.drawable.kg_seek_track, null)
             thumb = resources.getDrawable(R.drawable.kg_seek_thumb, null)
             thumbOffset = dp(5f).toInt()
