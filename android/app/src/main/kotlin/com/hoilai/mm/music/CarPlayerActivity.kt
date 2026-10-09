@@ -205,7 +205,7 @@ class CarPlayerActivity : Activity() {
             gravity = Gravity.CENTER_VERTICAL
         }
         header.addView(
-            circleIconButton(R.drawable.ic_kg_chevron_left, 40f, 44f, R.drawable.bg_circle_white12) {
+            circleIconButton(R.drawable.ic_kg_chevron_left, 34f, 44f, R.drawable.bg_circle_white12) {
                 CarPlayerBridge.sendEvent("closed"); finish(); overridePendingTransition(0, 0)
             },
             lp(dp(44f).toInt(), dp(44f).toInt())
@@ -220,12 +220,12 @@ class CarPlayerActivity : Activity() {
         hcol.addView(headerTitle, lpMatchWrap())
         hcol.addView(headerArtist, lpMatchWrap())
         header.addView(hcol, lpWeight(1f))
-        likeBtn = circleIconButton(R.drawable.ic_kg_heart_border, 32f, 44f, R.drawable.bg_circle_white12) {
+        likeBtn = circleIconButton(R.drawable.ic_kg_heart_border, 24f, 44f, R.drawable.bg_circle_white12) {
             CarPlayerBridge.sendEvent("like")
         }
         header.addView(likeBtn, lp(dp(44f).toInt(), dp(44f).toInt()))
         header.addView(space(dp(8f).toInt(), 0))
-        moreBtn = circleIconButton(R.drawable.ic_kg_more_horiz, 32f, 44f, R.drawable.bg_circle_white12) {
+        moreBtn = circleIconButton(R.drawable.ic_kg_more_horiz, 24f, 44f, R.drawable.bg_circle_white12) {
             showMoreSheet()
         }
         header.addView(moreBtn, lp(dp(44f).toInt(), dp(44f).toInt()))
@@ -322,23 +322,23 @@ class CarPlayerActivity : Activity() {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER
         }
-        modeBtn = circleIconButton(R.drawable.ic_kg_mode_loop, 40f, 50f, 0) {
+        modeBtn = circleIconButton(R.drawable.ic_kg_mode_loop, 34f, 56f, 0) {
             wantModeToast = true; CarPlayerBridge.sendEvent("playMode")
         }
-        btnRow.addView(modeBtn, lp(dp(50f).toInt(), dp(50f).toInt()))
-        btnRow.addView(space(dp(6f).toInt(), 0))
+        btnRow.addView(modeBtn, lp(dp(56f).toInt(), dp(56f).toInt()))
+        btnRow.addView(space(dp(24f).toInt(), 0))
         btnRow.addView(
-            circleIconButton(R.drawable.ic_kg_prev, 58f, 62f, 0) { CarPlayerBridge.sendEvent("prev") },
-            lp(dp(62f).toInt(), dp(62f).toInt())
+            circleIconButton(R.drawable.ic_kg_prev, 54f, 72f, 0) { CarPlayerBridge.sendEvent("prev") },
+            lp(dp(72f).toInt(), dp(72f).toInt())
         )
-        btnRow.addView(space(dp(6f).toInt(), 0))
+        btnRow.addView(space(dp(24f).toInt(), 0))
         val playWrap = FrameLayout(this)
         playBtn = ImageButton(this).apply {
             setBackgroundResource(R.drawable.bg_circle_white18)
             setImageResource(R.drawable.ic_kg_play)
             setColorFilter(0xFFFFFFFF.toInt())
             scaleType = ImageView.ScaleType.FIT_CENTER
-            val pad = dp(3f).toInt()
+            val pad = dp(12f).toInt()
             setPadding(pad, pad, pad, pad)
             setOnClickListener { CarPlayerBridge.sendEvent("playPause") }
         }
@@ -346,21 +346,21 @@ class CarPlayerActivity : Activity() {
             isIndeterminate = true
             visibility = View.GONE
         }
-        playWrap.addView(playBtn, FrameLayout.LayoutParams(dp(92f).toInt(), dp(92f).toInt()))
+        playWrap.addView(playBtn, FrameLayout.LayoutParams(dp(96f).toInt(), dp(96f).toInt()))
         playWrap.addView(
             playProgress,
-            FrameLayout.LayoutParams(dp(38f).toInt(), dp(38f).toInt(), Gravity.CENTER)
+            FrameLayout.LayoutParams(dp(42f).toInt(), dp(42f).toInt(), Gravity.CENTER)
         )
-        btnRow.addView(playWrap, lp(dp(92f).toInt(), dp(92f).toInt()))
-        btnRow.addView(space(dp(6f).toInt(), 0))
+        btnRow.addView(playWrap, lp(dp(96f).toInt(), dp(96f).toInt()))
+        btnRow.addView(space(dp(24f).toInt(), 0))
         btnRow.addView(
-            circleIconButton(R.drawable.ic_kg_next, 58f, 62f, 0) { CarPlayerBridge.sendEvent("next") },
-            lp(dp(62f).toInt(), dp(62f).toInt())
+            circleIconButton(R.drawable.ic_kg_next, 54f, 72f, 0) { CarPlayerBridge.sendEvent("next") },
+            lp(dp(72f).toInt(), dp(72f).toInt())
         )
-        btnRow.addView(space(dp(6f).toInt(), 0))
+        btnRow.addView(space(dp(24f).toInt(), 0))
         btnRow.addView(
-            circleIconButton(R.drawable.ic_kg_queue, 40f, 50f, 0) { showQueue() },
-            lp(dp(50f).toInt(), dp(50f).toInt())
+            circleIconButton(R.drawable.ic_kg_queue, 34f, 56f, 0) { showQueue() },
+            lp(dp(56f).toInt(), dp(56f).toInt())
         )
         right.addView(btnRow, lpMatchWrap().also { it.topMargin = dp(4f).toInt() })
 
@@ -435,15 +435,15 @@ class CarPlayerActivity : Activity() {
                 gradientType = GradientDrawable.RADIAL_GRADIENT
                 setGradientCenter(0.5f, 0.5f)
                 gradientRadius = sizePx / 2f
-                setColors(intArrayOf(0xE0FFFFFF.toInt(), 0x94FFFFFF.toInt(), 0x38FFFFFF.toInt()))
+                // 深色哑光黑胶：中心略亮、外缘渐暗，去除原先的白色发光高光
+                setColors(intArrayOf(0xFF2A2A30.toInt(), 0xFF1A1A1F.toInt(), 0xFF0E0E11.toInt()))
             }
-            elevation = dp(14f)
             outlineProvider = object : ViewOutlineProvider() {
                 override fun getOutline(view: View, outline: android.graphics.Outline) {
                     outline.setOval(0, 0, view.width, view.height)
                 }
             }
-            // 裁剪成圆形：否则方形 View 的径向渐变四角与矩形投影会随旋转露出"歪方块"。
+            // 仅裁剪成圆形：去掉 elevation 投影，消除高亮光晕。
             clipToOutline = true
         }
         discGroup.addView(glow, FrameLayout.LayoutParams(sizePx, sizePx, Gravity.CENTER))
