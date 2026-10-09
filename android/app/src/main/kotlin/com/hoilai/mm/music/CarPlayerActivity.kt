@@ -929,14 +929,19 @@ class CarPlayerActivity : Activity() {
         )
         bgView.background = GradientDrawable(
             GradientDrawable.Orientation.TOP_BOTTOM,
-            intArrayOf(0x52000000, 0x8F000000.toInt(), 0xD1000000.toInt())
+            // 竖向 scrim [.32,.56,.82] 叠加 Flutter 的整屏 flat black .12（按 alpha 合成 a+.12*(1-a)）
+            intArrayOf(0x67000000, 0x9D000000, 0xD7000000.toInt())
         )
     }
 
-    /** 近似 Flutter 的模糊封面背景：先缩到 ~48px 再双线性放大，制造磨砂感（minSdk26 无 RenderEffect）。 */
+    /**
+     * 近似 Flutter 的模糊封面背景（minSdk26 无 RenderEffect）：先强缩到 32px 制造大尺度色块，
+     * 再两段双线性放大(32→96→全尺寸)平滑掉一次插值会留下的棱线，逼近 sigma24 的柔和磨砂感。
+     */
     private fun blurCover(src: Bitmap): Bitmap {
-        val small = Bitmap.createScaledBitmap(src, 48, 48, true)
-        return Bitmap.createScaledBitmap(small, src.width, src.height, true)
+        val tiny = Bitmap.createScaledBitmap(src, 32, 32, true)
+        val mid = Bitmap.createScaledBitmap(tiny, 96, 96, true)
+        return Bitmap.createScaledBitmap(mid, src.width, src.height, true)
     }
 
     private fun loadCover(url: String?) {

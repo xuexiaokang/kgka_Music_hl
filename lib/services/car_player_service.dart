@@ -146,15 +146,15 @@ class CarPlayerService {
   }
 
   Map<String, dynamic> _styles() => {
-        'activeSizeSp': 30.0,
-        'inactiveSizeSp': 20.0,
+        'activeSizeSp': 34.0,
+        'inactiveSizeSp': 24.0,
         'translationSizeSp': 15.0,
-        'lineGapDp': 14.0,
-        'paddingHorizontalDp': 8.0,
-        'paddingVerticalDp': 24.0,
-        'baseColor': 0x66FFFFFF,
+        'lineGapDp': 16.0,
+        'paddingHorizontalDp': 24.0,
+        'paddingVerticalDp': 40.0,
+        'baseColor': 0x57FFFFFF,
         'activeColor': 0xFFFFFFFF.toInt(),
-        'transColor': 0x40FFFFFF,
+        'transColor': 0x3DFFFFFF,
         'showTranslation': true,
       };
 
