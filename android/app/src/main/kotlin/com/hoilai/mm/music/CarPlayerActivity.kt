@@ -35,13 +35,15 @@ import kotlin.math.max
  */
 class CarPlayerActivity : Activity() {
 
+    private lateinit var bgImage: ImageView
     private lateinit var bgView: View
     private lateinit var root: FrameLayout
     private lateinit var lyricView: CarLyricView
     private lateinit var discWrap: FrameLayout
     private lateinit var discGroup: FrameLayout
-    private lateinit var disc: ImageView
-    private lateinit var tonearm: ImageView
+    private var disc: ImageView? = null
+    private lateinit var headerTitle: TextView
+    private lateinit var headerArtist: TextView
     private lateinit var titleText: TextView
     private lateinit var artistText: TextView
     private lateinit var seek: SeekBar
@@ -60,6 +62,7 @@ class CarPlayerActivity : Activity() {
     private var sheet: FrameLayout? = null
 
     private var rotAnimator: ValueAnimator? = null
+    private var lastDiscSize = -1
 
     private var anchorPosMs = 0L
     private var anchorUptime = 0L
@@ -100,7 +103,7 @@ class CarPlayerActivity : Activity() {
             val cur = currentMs()
             seek.progress = cur.toInt()
             elapsedText.text = fmt(cur)
-            remainText.text = "-" + fmt(max(0L, durationMs - cur))
+            remainText.text = fmt(durationMs)
             if (!lyricView.userInteracting) lyricView.setProgress(cur)
             Choreographer.getInstance().postFrameCallback(this)
         }
@@ -166,150 +169,84 @@ class CarPlayerActivity : Activity() {
     private fun buildUi() {
         root = FrameLayout(this)
 
-        bgView = View(this).apply {
-            layoutParams = FrameLayout.LayoutParams(
+        // ---- 背景（对齐 Flutter _PlayerBackground）：模糊封面 + 竖向黑色渐变遮罩，兜底对角渐变
+        bgImage = ImageView(this).apply {
+            scaleType = ImageView.ScaleType.CENTER_CROP
+        }
+        root.addView(
+            bgImage, FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT
             )
-        }
-        root.addView(bgView)
+        )
+        bgView = View(this)
+        root.addView(
+            bgView, FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT
+            )
+        )
 
         val content = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             layoutParams = FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT
             )
-            setPadding(dp(28f).toInt(), dp(18f).toInt(), dp(28f).toInt(), dp(16f).toInt())
+            setPadding(dp(24f).toInt(), dp(10f).toInt(), dp(30f).toInt(), dp(36f).toInt())
         }
 
-        // 顶栏：左收起(关闭) / 右红心(收藏)
-        val topBar = LinearLayout(this).apply {
+        // ---- 头部：返回(圆钮) / 标题+艺人 / 收藏(圆钮) / 更多(圆钮)
+        val header = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
         }
-        topBar.addView(iconButton(R.drawable.ic_kg_close, dp(24f).toInt(), 0xFFEEFFFFFF.toInt()) {
-            CarPlayerBridge.sendEvent("closed")
-            finish()
-            overridePendingTransition(0, 0)
-        })
-        topBar.addView(View(this), LinearLayout.LayoutParams(0, 1, 1f))
-        likeBtn = iconButton(R.drawable.ic_kg_heart_border, dp(26f).toInt(), 0xFFEEFFFFFF.toInt()) {
+        header.addView(
+            circleIconButton(R.drawable.ic_kg_chevron_left, 34f, 44f, R.drawable.bg_circle_white12) {
+                CarPlayerBridge.sendEvent("closed"); finish(); overridePendingTransition(0, 0)
+            },
+            lp(dp(44f).toInt(), dp(44f).toInt())
+        )
+        header.addView(space(dp(18f).toInt(), 0))
+        val hcol = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        headerTitle = marqueeText(16f, 0xEBFFFFFF.toInt(), true)
+        headerArtist = marqueeText(12f, 0xB3FFFFFF.toInt(), true)
+        hcol.addView(headerTitle, lpMatchWrap())
+        hcol.addView(headerArtist, lpMatchWrap())
+        header.addView(hcol, lpWeight(1f))
+        likeBtn = circleIconButton(R.drawable.ic_kg_heart_border, 24f, 44f, R.drawable.bg_circle_white12) {
             CarPlayerBridge.sendEvent("like")
         }
-        topBar.addView(likeBtn)
-        moreBtn = iconButton(R.drawable.ic_kg_more, dp(24f).toInt(), 0xFFEEFFFFFF.toInt()) {
+        header.addView(likeBtn, lp(dp(44f).toInt(), dp(44f).toInt()))
+        header.addView(space(dp(8f).toInt(), 0))
+        moreBtn = circleIconButton(R.drawable.ic_kg_more_horiz, 24f, 44f, R.drawable.bg_circle_white12) {
             showMoreSheet()
         }
-        topBar.addView(moreBtn)
-        content.addView(topBar, LinearLayout.LayoutParams(
-            LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
+        header.addView(moreBtn, lp(dp(44f).toInt(), dp(44f).toInt()))
+        content.addView(header, lpMatchWrap())
+        content.addView(space(0, dp(10f).toInt()))
 
-        // 中部：左转盘+曲名 / 右歌词
-        val topRow = LinearLayout(this).apply {
+        // ---- 主体：左唱片(flex 9) + 右面板(flex 12)
+        val bodyRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f
             )
         }
 
-        val left = LinearLayout(this).apply {
+        discWrap = FrameLayout(this)
+        bodyRow.addView(discWrap, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 9f))
+        bodyRow.addView(space(dp(34f).toInt(), 0))
+
+        val right = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER
-            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, .42f)
-            setPadding(0, 0, dp(12f).toInt(), 0)
         }
-
-        val outer = dp(230f).toInt()
-        discGroup = FrameLayout(this)
-        val vinyl = View(this).apply {
-            background = GradientDrawable().apply {
-                shape = GradientDrawable.OVAL
-                setColor(0xFF141416.toInt())
-                setStroke(dp(1f).toInt(), 0xFF2C2C30.toInt())
-            }
-        }
-        discGroup.addView(vinyl, FrameLayout.LayoutParams(outer, outer))
-        disc = ImageView(this).apply {
-            scaleType = ImageView.ScaleType.CENTER_CROP
-            setLayerType(View.LAYER_TYPE_HARDWARE, null)
-            outlineProvider = object : ViewOutlineProvider() {
-                override fun getOutline(view: View, outline: android.graphics.Outline) {
-                    outline.setOval(0, 0, view.width, view.height)
-                }
-            }
-            clipToOutline = true
-        }
-        val inner = dp(150f).toInt()
-        discGroup.addView(disc, FrameLayout.LayoutParams(inner, inner, Gravity.CENTER))
-        val hole = View(this).apply {
-            background = GradientDrawable().apply {
-                shape = GradientDrawable.OVAL
-                setColor(0xFF0A0A0B.toInt())
-                setStroke(dp(1f).toInt(), 0xFF3A3A40.toInt())
-            }
-        }
-        discGroup.addView(hole, FrameLayout.LayoutParams(dp(24f).toInt(), dp(24f).toInt(), Gravity.CENTER))
-
-        tonearm = ImageView(this).apply {
-            setImageResource(R.drawable.ic_kg_tonearm)
-            setColorFilter(0xFFD8D8DC.toInt())
-            alpha = 0.95f
-            pivotX = dp(56f)
-            pivotY = dp(8f)
-            rotation = -14f
-        }
-        discWrap = FrameLayout(this).apply {
-            layoutParams = LinearLayout.LayoutParams(outer + dp(30f).toInt(), outer + dp(30f).toInt())
-        }
-        discWrap.addView(discGroup, FrameLayout.LayoutParams(outer, outer, Gravity.CENTER))
-        discWrap.addView(
-            tonearm,
-            FrameLayout.LayoutParams(dp(72f).toInt(), dp(72f).toInt()).also {
-                it.gravity = Gravity.TOP or Gravity.END
-                it.topMargin = dp(6f).toInt(); it.marginEnd = dp(2f).toInt()
-            }
-        )
-        left.addView(discWrap)
-
-        // 唱片区左右滑动切歌（对齐 Flutter 横屏 _LandscapeArtworkShowcase 的横向拖拽手势）
-        val discGesture = android.view.GestureDetector(this,
-            object : android.view.GestureDetector.SimpleOnGestureListener() {
-                override fun onDown(e: android.view.MotionEvent) = true
-                override fun onFling(
-                    e1: android.view.MotionEvent?, e2: android.view.MotionEvent,
-                    vx: Float, vy: Float
-                ): Boolean {
-                    if (kotlin.math.abs(vx) > 200f && kotlin.math.abs(vx) > kotlin.math.abs(vy)) {
-                        if (vx < 0) CarPlayerBridge.sendEvent("next")
-                        else CarPlayerBridge.sendEvent("prev")
-                        return true
-                    }
-                    return false
-                }
-            })
-        discWrap.isClickable = true
-        discWrap.setOnTouchListener { _, ev -> discGesture.onTouchEvent(ev) }
-
-        titleText = TextView(this).apply {
-            setTextColor(Color.WHITE)
-            textSize = 22f
-            setTypeface(typeface, android.graphics.Typeface.BOLD)
-            setPadding(0, dp(18f).toInt(), 0, 0)
-            gravity = Gravity.CENTER
-            maxLines = 1
-            ellipsize = android.text.TextUtils.TruncateAt.END
-        }
-        artistText = TextView(this).apply {
-            setTextColor(0xFFB8B8BE.toInt())
-            textSize = 14f
-            gravity = Gravity.CENTER
-            maxLines = 1
-            ellipsize = android.text.TextUtils.TruncateAt.END
-        }
-        left.addView(titleText, LinearLayout.LayoutParams(
-            LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
-        left.addView(artistText, LinearLayout.LayoutParams(
-            LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
-        topRow.addView(left)
+        titleText = marqueeText(22f, 0xEBFFFFFF.toInt(), true).apply { gravity = Gravity.CENTER }
+        artistText = marqueeText(14f, 0x99FFFFFF.toInt(), false).apply { gravity = Gravity.CENTER }
+        right.addView(titleText, lpMatchWrap().also { it.topMargin = dp(6f).toInt() })
+        right.addView(space(0, dp(4f).toInt()))
+        right.addView(artistText, lpMatchWrap())
+        right.addView(space(0, dp(12f).toInt()))
 
         lyricView = CarLyricView(this).apply {
             setBackgroundColor(Color.TRANSPARENT)
@@ -318,23 +255,20 @@ class CarPlayerActivity : Activity() {
                 CarPlayerBridge.sendEvent("seek", mapOf("ms" to ms))
             }
         }
-        topRow.addView(lyricView, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, .58f))
-        content.addView(topRow)
+        right.addView(lyricView, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f
+        ))
+        right.addView(space(0, dp(6f).toInt()))
 
-        // 进度行
-        val seekRow = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(0, dp(6f).toInt(), 0, dp(2f).toInt())
-        }
-        elapsedText = TextView(this).apply { setTextColor(0xFFCCFFFFFF.toInt()); textSize = 12f; text = "0:00" }
-        remainText = TextView(this).apply { setTextColor(0xFFCCFFFFFF.toInt()); textSize = 12f; text = "0:00" }
+        // 进度：白色滑块 + 高潮圆点，下方 已播 / 总时长
+        val seekWrap = FrameLayout(this)
         seek = SeekBar(this).apply {
             max = 1
             progressDrawable = resources.getDrawable(R.drawable.kg_seek_track, null)
             thumb = resources.getDrawable(R.drawable.kg_seek_thumb, null)
-            thumbOffset = dp(6f).toInt()
+            thumbOffset = dp(5f).toInt()
             splitTrack = false
+            setPadding(0, dp(8f).toInt(), 0, dp(8f).toInt())
             setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
                 override fun onProgressChanged(sb: SeekBar?, p: Int, fromUser: Boolean) {
                     if (fromUser) elapsedText.text = fmt(p.toLong())
@@ -348,9 +282,6 @@ class CarPlayerActivity : Activity() {
                 }
             })
         }
-        seekRow.addView(elapsedText)
-        // 用 FrameLayout 包裹进度条，叠加上"高潮片段"小圆点标记（对齐 Flutter _Progress）
-        val seekWrap = FrameLayout(this)
         seekWrap.addView(seek, FrameLayout.LayoutParams(
             FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT
         ))
@@ -363,91 +294,206 @@ class CarPlayerActivity : Activity() {
             visibility = View.GONE
             isClickable = false
         }
-        seekWrap.addView(climaxDot, FrameLayout.LayoutParams(dp(8f).toInt(), dp(8f).toInt()).also {
+        seekWrap.addView(climaxDot, FrameLayout.LayoutParams(dp(7f).toInt(), dp(7f).toInt()).also {
             it.gravity = Gravity.CENTER_VERTICAL
         })
-        seekRow.addView(seekWrap, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).also {
-            it.marginStart = dp(12f).toInt(); it.marginEnd = dp(12f).toInt()
-        })
+        right.addView(seekWrap, lpMatchWrap())
+        seekRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(2f).toInt(), 0, dp(2f).toInt(), 0)
+        }
+        elapsedText = TextView(this).apply { setTextColor(0xA3FFFFFF.toInt()); textSize = 12f; text = "0:00" }
+        remainText = TextView(this).apply { setTextColor(0xA3FFFFFF.toInt()); textSize = 12f; text = "0:00" }
+        seekRow.addView(elapsedText)
+        seekRow.addView(View(this), LinearLayout.LayoutParams(0, 1, 1f))
         seekRow.addView(remainText)
-        this.seekRow = seekRow
-        content.addView(seekRow, LinearLayout.LayoutParams(
-            LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
+        right.addView(seekRow, lpMatchWrap().also { it.topMargin = dp(2f).toInt() })
+        right.addView(space(0, dp(4f).toInt()))
 
-        // 控制行：循环 / 上一曲 / 播放(大圆) / 下一曲 / 队列
+        // 控制行：循环 / 上一曲 / 播放(半透白圆) / 下一曲 / 队列
         val btnRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER
-            setPadding(0, dp(10f).toInt(), 0, dp(4f).toInt())
         }
-        modeBtn = iconButton(R.drawable.ic_kg_mode_loop, dp(30f).toInt(), 0xFFEAEAEF.toInt()) {
-            wantModeToast = true
-            CarPlayerBridge.sendEvent("playMode")
+        modeBtn = circleIconButton(R.drawable.ic_kg_mode_loop, 24f, 40f, 0) {
+            wantModeToast = true; CarPlayerBridge.sendEvent("playMode")
         }
-        btnRow.addView(modeBtn)
-        btnRow.addView(iconButton(R.drawable.ic_kg_prev, dp(38f).toInt(), 0xFFF2F2F5.toInt()) {
-            CarPlayerBridge.sendEvent("prev")
-        })
-        playBtn = bigPlayButton()
-        // 播放按钮外叠一层环形进度，缓冲时显示（对齐 Flutter _Controls 的 CircularProgressIndicator）
+        btnRow.addView(modeBtn, lp(dp(40f).toInt(), dp(40f).toInt()))
+        btnRow.addView(space(dp(5f).toInt(), 0))
+        btnRow.addView(
+            circleIconButton(R.drawable.ic_kg_prev, 40f, 50f, 0) { CarPlayerBridge.sendEvent("prev") },
+            lp(dp(50f).toInt(), dp(50f).toInt())
+        )
+        btnRow.addView(space(dp(5f).toInt(), 0))
         val playWrap = FrameLayout(this)
+        playBtn = ImageButton(this).apply {
+            setBackgroundResource(R.drawable.bg_circle_white18)
+            setImageResource(R.drawable.ic_kg_play)
+            setColorFilter(0xFFFFFFFF.toInt())
+            scaleType = ImageView.ScaleType.CENTER_INSIDE
+            val pad = dp(8f).toInt()
+            setPadding(pad, pad, pad, pad)
+            setOnClickListener { CarPlayerBridge.sendEvent("playPause") }
+        }
         playProgress = android.widget.ProgressBar(this, null, android.R.attr.progressBarStyleSmall).apply {
             isIndeterminate = true
             visibility = View.GONE
-            scaleX = 1.2f; scaleY = 1.2f
         }
-        playWrap.addView(playBtn)
+        playWrap.addView(playBtn, FrameLayout.LayoutParams(dp(72f).toInt(), dp(72f).toInt()))
         playWrap.addView(
             playProgress,
-            FrameLayout.LayoutParams(dp(34f).toInt(), dp(34f).toInt(), Gravity.CENTER)
+            FrameLayout.LayoutParams(dp(30f).toInt(), dp(30f).toInt(), Gravity.CENTER)
         )
-        btnRow.addView(playWrap)
-        btnRow.addView(iconButton(R.drawable.ic_kg_next, dp(38f).toInt(), 0xFFF2F2F5.toInt()) {
-            CarPlayerBridge.sendEvent("next")
-        })
-        btnRow.addView(iconButton(R.drawable.ic_kg_queue, dp(30f).toInt(), 0xFFEAEAEF.toInt()) {
-            showQueue()
-        })
-        content.addView(btnRow, LinearLayout.LayoutParams(
-            LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
+        btnRow.addView(playWrap, lp(dp(72f).toInt(), dp(72f).toInt()))
+        btnRow.addView(space(dp(5f).toInt(), 0))
+        btnRow.addView(
+            circleIconButton(R.drawable.ic_kg_next, 40f, 50f, 0) { CarPlayerBridge.sendEvent("next") },
+            lp(dp(50f).toInt(), dp(50f).toInt())
+        )
+        btnRow.addView(space(dp(5f).toInt(), 0))
+        btnRow.addView(
+            circleIconButton(R.drawable.ic_kg_queue, 24f, 40f, 0) { showQueue() },
+            lp(dp(40f).toInt(), dp(40f).toInt())
+        )
+        right.addView(btnRow, lpMatchWrap().also { it.topMargin = dp(4f).toInt() })
+
+        bodyRow.addView(right, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 12f))
+        content.addView(bodyRow)
 
         root.addView(content)
         root.addView(buildQueueOverlay())
 
         setContentView(root)
-    }
 
-    private fun bigPlayButton(): ImageButton {
-        val size = dp(64f).toInt()
-        return ImageButton(this).apply {
-            setBackgroundResource(R.drawable.kg_play_circle)
-            setImageResource(R.drawable.ic_kg_play)
-            setColorFilter(0xFF15151A.toInt())
-            scaleType = ImageView.ScaleType.CENTER_INSIDE
-            val pad = dp(16f).toInt()
-            setPadding(pad, pad, pad, pad)
-            layoutParams = LinearLayout.LayoutParams(size, size).also {
-                it.marginStart = dp(22f).toInt(); it.marginEnd = dp(22f).toInt()
-            }
-            setOnClickListener { CarPlayerBridge.sendEvent("playPause") }
+        // 唱片在首帧按左栏实际尺寸构建（对齐 Flutter discSize = min(w,h)*0.9 clamp 150..330dp）
+        discWrap.addOnLayoutChangeListener { v, _, _, _, _, _, _, _, _ ->
+            val w = v.width; val h = v.height
+            if (w <= 0 || h <= 0) return@addOnLayoutChangeListener
+            val density = resources.displayMetrics.density
+            val sizePx = (minOf(w, h) * 0.9f).coerceIn(dp(150f), dp(330f)).toInt()
+            if (sizePx != lastDiscSize) { lastDiscSize = sizePx; buildDisc(sizePx) }
         }
     }
 
-    private fun iconButton(resId: Int, iconSizePx: Int, tint: Int, onTap: () -> Unit): ImageButton {
-        val s = dp(50f).toInt()
+    private fun circleIconButton(
+        resId: Int, iconSizeDp: Float, sizeDp: Float, bgRes: Int, onTap: () -> Unit
+    ): ImageButton {
+        val s = dp(sizeDp).toInt()
+        val icon = dp(iconSizeDp).toInt()
         return ImageButton(this).apply {
+            if (bgRes != 0) setBackgroundResource(bgRes) else setBackgroundColor(Color.TRANSPARENT)
             setImageResource(resId)
-            setBackgroundColor(Color.TRANSPARENT)
-            setColorFilter(tint)
+            setColorFilter(0xFFFFFFFF.toInt())
             scaleType = ImageView.ScaleType.CENTER_INSIDE
-            val pad = ((s - iconSizePx) / 2).coerceAtLeast(0)
+            val pad = ((s - icon) / 2).coerceAtLeast(0)
             setPadding(pad, pad, pad, pad)
-            layoutParams = LinearLayout.LayoutParams(s, s).also {
-                it.marginStart = dp(6f).toInt(); it.marginEnd = dp(6f).toInt()
-            }
             contentDescription = null
             setOnClickListener { onTap() }
         }
+    }
+
+    private fun marqueeText(sizeSp: Float, color: Int, bold: Boolean): TextView =
+        TextView(this).apply {
+            setTextColor(color)
+            textSize = sizeSp
+            if (bold) setTypeface(typeface, android.graphics.Typeface.BOLD)
+            maxLines = 1
+            ellipsize = android.text.TextUtils.TruncateAt.MARQUEE
+            isSingleLine = true
+            isSelected = true
+        }
+
+    private fun space(w: Int, h: Int): View = View(this).apply {
+        layoutParams = LinearLayout.LayoutParams(w, h)
+    }
+
+    private fun lp(w: Int, h: Int): LinearLayout.LayoutParams =
+        LinearLayout.LayoutParams(w, h)
+
+    private fun lpMatchWrap(): LinearLayout.LayoutParams = LinearLayout.LayoutParams(
+        LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
+    )
+
+    private fun lpWeight(weight: Float): LinearLayout.LayoutParams =
+        LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, weight)
+
+    /** 构建 Flutter 风白色发光唱片：径向渐变盘体 + 同心环 + 中心封面 + 白点，整体随 discGroup 旋转。 */
+    private fun buildDisc(sizePx: Int) {
+        discWrap.removeAllViews()
+        discGroup = FrameLayout(this)
+
+        val glow = View(this).apply {
+            background = GradientDrawable().apply {
+                type = GradientDrawable.RADIAL_GRADIENT
+                gradientCenterX = 0.5f; gradientCenterY = 0.5f
+                gradientRadius = sizePx / 2f
+                setColors(intArrayOf(0xE0FFFFFF.toInt(), 0x94FFFFFF.toInt(), 0x38FFFFFF.toInt()))
+            }
+            elevation = dp(14f)
+            outlineProvider = object : ViewOutlineProvider() {
+                override fun getOutline(view: View, outline: android.graphics.Outline) {
+                    outline.setOval(0, 0, view.width, view.height)
+                }
+            }
+        }
+        discGroup.addView(glow, FrameLayout.LayoutParams(sizePx, sizePx, Gravity.CENTER))
+
+        for (ratio in floatArrayOf(.36f, .52f, .68f, .82f)) {
+            val ring = View(this).apply {
+                setBackgroundResource(R.drawable.bg_disc_ring)
+                isClickable = false
+            }
+            val d = (sizePx * ratio).toInt()
+            discGroup.addView(ring, FrameLayout.LayoutParams(d, d, Gravity.CENTER))
+        }
+
+        val cover = ImageView(this).apply {
+            scaleType = ImageView.ScaleType.CENTER_CROP
+            setLayerType(View.LAYER_TYPE_HARDWARE, null)
+            outlineProvider = object : ViewOutlineProvider() {
+                override fun getOutline(view: View, outline: android.graphics.Outline) {
+                    outline.setOval(0, 0, view.width, view.height)
+                }
+            }
+            clipToOutline = true
+        }
+        disc = cover
+        val coverSize = (sizePx * 0.70f).toInt()
+        discGroup.addView(cover, FrameLayout.LayoutParams(coverSize, coverSize, Gravity.CENTER))
+
+        val dot = View(this).apply {
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.OVAL
+                setColor(0xD1FFFFFF.toInt())
+            }
+        }
+        val dd = (sizePx * 0.08f).toInt().coerceAtLeast(dp(8f).toInt())
+        discGroup.addView(dot, FrameLayout.LayoutParams(dd, dd, Gravity.CENTER))
+
+        discWrap.addView(discGroup, FrameLayout.LayoutParams(sizePx, sizePx, Gravity.CENTER))
+
+        // 左右滑动切歌（对齐 Flutter _LandscapeArtworkShowcase.onHorizontalDragEnd）
+        val discGesture = android.view.GestureDetector(this,
+            object : android.view.GestureDetector.SimpleOnGestureListener() {
+                override fun onDown(e: android.view.MotionEvent) = true
+                override fun onFling(
+                    e1: android.view.MotionEvent?, e2: android.view.MotionEvent,
+                    vx: Float, vy: Float
+                ): Boolean {
+                    if (kotlin.math.abs(vx) > 200f && kotlin.math.abs(vx) > kotlin.math.abs(vy)) {
+                        if (vx < 0) CarPlayerBridge.sendEvent("next") else CarPlayerBridge.sendEvent("prev")
+                        return true
+                    }
+                    return false
+                }
+            })
+        discWrap.isClickable = true
+        discWrap.setOnTouchListener { _, ev -> discGesture.onTouchEvent(ev) }
+
+        // 换歌后封面图重挂到新的 disc；恢复旋转动画与当前封面
+        coverUrl?.let { loadCover(it) }
+        if (playing) startRotation()
     }
 
     // --------------------------------------------------------- 队列面板
@@ -698,8 +744,12 @@ class CarPlayerActivity : Activity() {
 
     fun onMeta(m: Map<*, *>?) {
         if (m == null) return
-        titleText.text = (m["title"] as? String) ?: ""
-        artistText.text = (m["artist"] as? String) ?: ""
+        val t = (m["title"] as? String) ?: ""
+        val a = (m["artist"] as? String) ?: ""
+        titleText.text = t
+        artistText.text = a
+        headerTitle.text = t
+        headerArtist.text = a
         val url = m["coverUrl"] as? String
         if (url != coverUrl) { coverUrl = url; loadCover(url) }
         (m["playMode"] as? Number)?.let { setPlayMode(it.toInt()) }
@@ -753,7 +803,7 @@ class CarPlayerActivity : Activity() {
             val cur = currentMs()
             seek.progress = cur.toInt()
             elapsedText.text = fmt(cur)
-            remainText.text = "-" + fmt(max(0L, durationMs - cur))
+            remainText.text = fmt(durationMs)
             if (!lyricView.userInteracting) lyricView.setProgress(cur)
         }
     }
@@ -830,7 +880,6 @@ class CarPlayerActivity : Activity() {
 
     private fun applyPlayState(isPlaying: Boolean) {
         playBtn.setImageResource(if (isPlaying) R.drawable.ic_kg_pause else R.drawable.ic_kg_play)
-        tonearm.animate().rotation(if (isPlaying) 26f else -14f).setDuration(500).start()
         if (isPlaying) {
             startRotation()
             if (!clockStarted) {
@@ -853,7 +902,7 @@ class CarPlayerActivity : Activity() {
     private fun startRotation() {
         if (rotAnimator?.isRunning == true) return
         rotAnimator = ValueAnimator.ofFloat(0f, 360f).apply {
-            duration = 20000L
+            duration = 32000L
             repeatCount = ValueAnimator.INFINITE
             interpolator = LinearInterpolator()
             addUpdateListener { discGroup.rotation = it.animatedValue as Float }
@@ -867,16 +916,28 @@ class CarPlayerActivity : Activity() {
     }
 
     private fun setDefaultBackground() {
+        bgImage.setImageDrawable(
+            GradientDrawable(
+                GradientDrawable.Orientation.TL_BR,
+                intArrayOf(0xFF153D35.toInt(), 0xFF061219.toInt(), 0xFF2C1320.toInt())
+            )
+        )
         bgView.background = GradientDrawable(
             GradientDrawable.Orientation.TOP_BOTTOM,
-            intArrayOf(0xFF1C2230.toInt(), 0xFF0E1016.toInt(), 0xFF000000.toInt())
+            intArrayOf(0x52000000, 0x8F000000.toInt(), 0xD1000000.toInt())
         )
+    }
+
+    /** 近似 Flutter 的模糊封面背景：先缩到 ~48px 再双线性放大，制造磨砂感（minSdk26 无 RenderEffect）。 */
+    private fun blurCover(src: Bitmap): Bitmap {
+        val small = Bitmap.createScaledBitmap(src, 48, 48, true)
+        return Bitmap.createScaledBitmap(small, src.width, src.height, true)
     }
 
     private fun loadCover(url: String?) {
         val token = ++coverToken
         if (url.isNullOrBlank()) {
-            runOnUiThread { if (token == coverToken) disc.setImageDrawable(null) }
+            runOnUiThread { if (token == coverToken) disc?.setImageDrawable(null) }
             return
         }
         Thread {
@@ -893,64 +954,20 @@ class CarPlayerActivity : Activity() {
                     val real = BitmapFactory.Options().apply { inSampleSize = sample }
                     val bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, real)
                     if (bmp != null && token == coverToken) {
-                        val grad = gradientFromCover(bmp)
+                        val blurred = blurCover(bmp)
                         runOnUiThread {
                             if (token == coverToken) {
-                                disc.setImageBitmap(bmp)
-                                bgView.background = grad
+                                disc?.setImageBitmap(bmp)
+                                bgImage.setImageBitmap(blurred)
                             }
                         }
                     }
                 }
                 conn.disconnect()
             } catch (_: Exception) {
-                // 封面失败不影响播放，留默认深色渐变
+                // 封面失败不影响播放，保留兜底对角渐变
             }
         }.start()
-    }
-
-    /** 从封面取色：上/下分区平均后压暗，生成自上而下的深色渐变（近似酷狗模糊封面背景）。 */
-    private fun gradientFromCover(bmp: Bitmap): GradientDrawable {
-        val w = bmp.width; val h = bmp.height
-        if (w <= 0 || h <= 0) return defaultGradient()
-        val top = avgColor(bmp, 0, (h * 0.33f).toInt().coerceAtLeast(1))
-        val mid = avgColor(bmp, (h * 0.33f).toInt(), (h * 0.66f).toInt().coerceAtLeast(2))
-        val bot = avgColor(bmp, (h * 0.66f).toInt(), h)
-        return GradientDrawable(
-            GradientDrawable.Orientation.TOP_BOTTOM,
-            intArrayOf(darken(top, 0.42f), darken(mid, 0.30f), darken(bot, 0.16f))
-        )
-    }
-
-    private fun defaultGradient(): GradientDrawable = GradientDrawable(
-        GradientDrawable.Orientation.TOP_BOTTOM,
-        intArrayOf(0xFF1C2230.toInt(), 0xFF0E1016.toInt(), 0xFF000000.toInt())
-    )
-
-    private fun avgColor(bmp: Bitmap, y0: Int, y1: Int): Int {
-        var r = 0L; var g = 0L; var b = 0L; var n = 0L
-        val stepX = (bmp.width / 12).coerceAtLeast(1)
-        val stepY = ((y1 - y0) / 12).coerceAtLeast(1)
-        var y = y0
-        while (y < y1) {
-            var x = 0
-            while (x < bmp.width) {
-                val c = bmp.getPixel(x, y)
-                r += (c shr 16) and 0xFF; g += (c shr 8) and 0xFF; b += c and 0xFF; n++
-                x += stepX
-            }
-            y += stepY
-        }
-        if (n == 0L) return 0xFF101014.toInt()
-        return (0xFF shl 24) or ((r / n).toInt() shl 16) or ((g / n).toInt() shl 8) or (b / n).toInt()
-    }
-
-    private fun darken(c: Int, f: Float): Int {
-        val a = 0xFF shl 24
-        val r = (((c shr 16) and 0xFF) * f).toInt().coerceIn(0, 255)
-        val g = (((c shr 8) and 0xFF) * f).toInt().coerceIn(0, 255)
-        val b = ((c and 0xFF) * f).toInt().coerceIn(0, 255)
-        return a or (r shl 16) or (g shl 8) or b
     }
 
     private fun fmt(ms: Long): String {
