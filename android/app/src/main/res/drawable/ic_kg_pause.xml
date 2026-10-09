@@ -1,6 +1,9 @@
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="24dp" android:height="24dp"
     android:viewportWidth="24" android:viewportHeight="24">
-    <path android:fillColor="#FFFFFFFF" android:pathData="M6,5h4v14h-4z"/>
-    <path android:fillColor="#FFFFFFFF" android:pathData="M14,5h4v14h-4z"/>
+    <!-- 粗线条圆头暂停：两条竖线撑满画布，round cap -->
+    <path android:strokeColor="#FFFFFFFF" android:strokeWidth="3.8"
+        android:strokeLineCap="round" android:pathData="M8.5,5 V19"/>
+    <path android:strokeColor="#FFFFFFFF" android:strokeWidth="3.8"
+        android:strokeLineCap="round" android:pathData="M15.5,5 V19"/>
 </vector>

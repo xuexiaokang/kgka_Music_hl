@@ -1,6 +1,10 @@
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="24dp" android:height="24dp"
     android:viewportWidth="24" android:viewportHeight="24">
-    <path android:fillColor="#FFFFFFFF" android:pathData="M16,6h2v12h-2z"/>
-    <path android:fillColor="#FFFFFFFF" android:pathData="M4,6l9.5,6 -9.5,6z"/>
+    <!-- 下一首：右指圆润大三角 + 右侧圆头竖条 -->
+    <path android:fillColor="#FFFFFFFF" android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="2.2" android:strokeLineJoin="round" android:strokeLineCap="round"
+        android:pathData="M5,5.5 L5,18.5 L16,12 Z"/>
+    <path android:strokeColor="#FFFFFFFF" android:strokeWidth="3.2"
+        android:strokeLineCap="round" android:pathData="M18,5 V19"/>
 </vector>

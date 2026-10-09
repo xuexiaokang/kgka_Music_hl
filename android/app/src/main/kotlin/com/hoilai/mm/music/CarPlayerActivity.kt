@@ -316,13 +316,13 @@ class CarPlayerActivity : Activity() {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER
         }
-        modeBtn = circleIconButton(R.drawable.ic_kg_mode_loop, 30f, 50f, 0) {
+        modeBtn = circleIconButton(R.drawable.ic_kg_mode_loop, 40f, 50f, 0) {
             wantModeToast = true; CarPlayerBridge.sendEvent("playMode")
         }
         btnRow.addView(modeBtn, lp(dp(50f).toInt(), dp(50f).toInt()))
         btnRow.addView(space(dp(6f).toInt(), 0))
         btnRow.addView(
-            circleIconButton(R.drawable.ic_kg_prev, 50f, 62f, 0) { CarPlayerBridge.sendEvent("prev") },
+            circleIconButton(R.drawable.ic_kg_prev, 58f, 62f, 0) { CarPlayerBridge.sendEvent("prev") },
             lp(dp(62f).toInt(), dp(62f).toInt())
         )
         btnRow.addView(space(dp(6f).toInt(), 0))
@@ -332,7 +332,7 @@ class CarPlayerActivity : Activity() {
             setImageResource(R.drawable.ic_kg_play)
             setColorFilter(0xFFFFFFFF.toInt())
             scaleType = ImageView.ScaleType.CENTER_INSIDE
-            val pad = dp(10f).toInt()
+            val pad = dp(6f).toInt()
             setPadding(pad, pad, pad, pad)
             setOnClickListener { CarPlayerBridge.sendEvent("playPause") }
         }
@@ -348,12 +348,12 @@ class CarPlayerActivity : Activity() {
         btnRow.addView(playWrap, lp(dp(92f).toInt(), dp(92f).toInt()))
         btnRow.addView(space(dp(6f).toInt(), 0))
         btnRow.addView(
-            circleIconButton(R.drawable.ic_kg_next, 50f, 62f, 0) { CarPlayerBridge.sendEvent("next") },
+            circleIconButton(R.drawable.ic_kg_next, 58f, 62f, 0) { CarPlayerBridge.sendEvent("next") },
             lp(dp(62f).toInt(), dp(62f).toInt())
         )
         btnRow.addView(space(dp(6f).toInt(), 0))
         btnRow.addView(
-            circleIconButton(R.drawable.ic_kg_queue, 30f, 50f, 0) { showQueue() },
+            circleIconButton(R.drawable.ic_kg_queue, 40f, 50f, 0) { showQueue() },
             lp(dp(50f).toInt(), dp(50f).toInt())
         )
         right.addView(btnRow, lpMatchWrap().also { it.topMargin = dp(4f).toInt() })

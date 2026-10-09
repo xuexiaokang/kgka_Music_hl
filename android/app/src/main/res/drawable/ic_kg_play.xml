@@ -1,5 +1,8 @@
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="24dp" android:height="24dp"
     android:viewportWidth="24" android:viewportHeight="24">
-    <path android:fillColor="#FFFFFFFF" android:pathData="M8,5v14l11,-7z"/>
+    <!-- 圆润加粗播放三角：填充 + 同色圆角描边把尖角磨圆 -->
+    <path android:fillColor="#FFFFFFFF" android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="2.6" android:strokeLineJoin="round" android:strokeLineCap="round"
+        android:pathData="M7.5,5 L7.5,19 L19,12 Z"/>
 </vector>
