@@ -4,7 +4,12 @@ import android.animation.ValueAnimator
 import android.app.Activity
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.BitmapShader
+import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.Matrix
+import android.graphics.Paint
+import android.graphics.Shader
 import android.graphics.drawable.GradientDrawable
 import android.os.Bundle
 import android.view.Choreographer
@@ -20,6 +25,7 @@ import android.widget.ScrollView
 import android.widget.SeekBar
 import android.widget.TextView
 import kotlin.math.max
+import kotlin.math.min
 
 /**
  * 全原生车机全屏播放器（酷狗风换皮，保持横屏左右分栏）：
@@ -451,14 +457,9 @@ class CarPlayerActivity : Activity() {
         }
 
         val cover = ImageView(this).apply {
-            scaleType = ImageView.ScaleType.CENTER_CROP
+            // 圆形封面在位图里预抗锯齿(circleize)，故不再用 clipToOutline 硬裁(硬裁边缘有锯齿)
+            scaleType = ImageView.ScaleType.FIT_XY
             setLayerType(View.LAYER_TYPE_HARDWARE, null)
-            outlineProvider = object : ViewOutlineProvider() {
-                override fun getOutline(view: View, outline: android.graphics.Outline) {
-                    outline.setOval(0, 0, view.width, view.height)
-                }
-            }
-            clipToOutline = true
         }
         disc = cover
         val coverSize = (sizePx * 0.70f).toInt()
@@ -935,13 +936,81 @@ class CarPlayerActivity : Activity() {
     }
 
     /**
-     * 近似 Flutter 的模糊封面背景（minSdk26 无 RenderEffect）：先强缩到 32px 制造大尺度色块，
-     * 再两段双线性放大(32→96→全尺寸)平滑掉一次插值会留下的棱线，逼近 sigma24 的柔和磨砂感。
+     * 近似 Flutter 的模糊封面背景（minSdk26 无 RenderEffect）：
+     *  先把长边缩到 ~72px 制造大尺度柔化，再做 3 遍真·盒式模糊(滑窗均值)消除相邻色块间的硬棱，
+     *  最后双线性放大回原尺寸。之前只做缩放(无均值)会留下 32px 网格的马赛克拼块感，均值模糊才是柔和磨砂。
      */
     private fun blurCover(src: Bitmap): Bitmap {
-        val tiny = Bitmap.createScaledBitmap(src, 32, 32, true)
-        val mid = Bitmap.createScaledBitmap(tiny, 96, 96, true)
-        return Bitmap.createScaledBitmap(mid, src.width, src.height, true)
+        val maxSide = 72
+        val scale = maxSide.toFloat() / max(src.width, src.height)
+        val w = (src.width * scale).toInt().coerceIn(8, maxSide)
+        val h = (src.height * scale).toInt().coerceIn(8, maxSide)
+        val small = Bitmap.createScaledBitmap(src, w, h, true)
+        val px = IntArray(w * h)
+        small.getPixels(px, 0, w, 0, 0, w, h)
+        boxBlur(px, w, h, 4)
+        boxBlur(px, w, h, 4)
+        boxBlur(px, w, h, 4)
+        small.setPixels(px, 0, w, 0, 0, w, h)
+        return Bitmap.createScaledBitmap(small, src.width, src.height, true)
+    }
+
+    /** 可分离盒式模糊：横向滑窗均值到 tmp，再纵向滑窗均值写回 px。alpha 强制不透明。 */
+    private fun boxBlur(px: IntArray, w: Int, h: Int, r: Int) {
+        val tmp = IntArray(px.size)
+        val div = 2 * r + 1
+        for (y in 0 until h) {
+            val row = y * w
+            var rs = 0; var gs = 0; var bs = 0
+            for (i in -r..r) {
+                val c = px[row + i.coerceIn(0, w - 1)]
+                rs += (c shr 16) and 0xFF; gs += (c shr 8) and 0xFF; bs += c and 0xFF
+            }
+            for (x in 0 until w) {
+                tmp[row + x] = 0xFF000000.toInt() or ((rs / div) shl 16) or ((gs / div) shl 8) or (bs / div)
+                val a = px[row + (x + r + 1).coerceIn(0, w - 1)]
+                val s = px[row + (x - r).coerceIn(0, w - 1)]
+                rs += ((a shr 16) and 0xFF) - ((s shr 16) and 0xFF)
+                gs += ((a shr 8) and 0xFF) - ((s shr 8) and 0xFF)
+                bs += (a and 0xFF) - (s and 0xFF)
+            }
+        }
+        for (x in 0 until w) {
+            var rs = 0; var gs = 0; var bs = 0
+            for (i in -r..r) {
+                val c = tmp[i.coerceIn(0, h - 1) * w + x]
+                rs += (c shr 16) and 0xFF; gs += (c shr 8) and 0xFF; bs += c and 0xFF
+            }
+            for (y in 0 until h) {
+                px[y * w + x] = 0xFF000000.toInt() or ((rs / div) shl 16) or ((gs / div) shl 8) or (bs / div)
+                val a = tmp[(y + r + 1).coerceIn(0, h - 1) * w + x]
+                val s = tmp[(y - r).coerceIn(0, h - 1) * w + x]
+                rs += ((a shr 16) and 0xFF) - ((s shr 16) and 0xFF)
+                gs += ((a shr 8) and 0xFF) - ((s shr 8) and 0xFF)
+                bs += (a and 0xFF) - (s and 0xFF)
+            }
+        }
+    }
+
+    /**
+     * 把封面裁成正圆并预抗锯齿：用 BitmapShader 填充一个带 AA+双线性采样的圆，
+     * 2x 超采样后交 ImageView 缩放，使旋转唱片时圆周边缘依旧平滑(替代 clipToOutline 的硬边锯齿)。
+     */
+    private fun circleize(src: Bitmap): Bitmap {
+        val side = min(src.width, src.height)
+        val n = (side * 2).coerceIn(240, 720)
+        val out = Bitmap.createBitmap(n, n, Bitmap.Config.ARGB_8888)
+        val c = Canvas(out)
+        val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
+        val shader = BitmapShader(src, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP)
+        val m = Matrix()
+        val s = n.toFloat() / side
+        m.setScale(s, s)
+        m.postTranslate((n - src.width * s) / 2f, (n - src.height * s) / 2f)
+        shader.setLocalMatrix(m)
+        paint.shader = shader
+        c.drawCircle(n / 2f, n / 2f, n / 2f, paint)
+        return out
     }
 
     private fun loadCover(url: String?) {
@@ -965,9 +1034,10 @@ class CarPlayerActivity : Activity() {
                     val bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, real)
                     if (bmp != null && token == coverToken) {
                         val blurred = blurCover(bmp)
+                        val circle = circleize(bmp)
                         runOnUiThread {
                             if (token == coverToken) {
-                                disc?.setImageBitmap(bmp)
+                                disc?.setImageBitmap(circle)
                                 bgImage.setImageBitmap(blurred)
                             }
                         }
