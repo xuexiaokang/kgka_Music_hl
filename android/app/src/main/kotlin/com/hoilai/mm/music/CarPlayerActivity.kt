@@ -316,23 +316,23 @@ class CarPlayerActivity : Activity() {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER
         }
-        modeBtn = circleIconButton(R.drawable.ic_kg_mode_loop, 24f, 40f, 0) {
+        modeBtn = circleIconButton(R.drawable.ic_kg_mode_loop, 30f, 50f, 0) {
             wantModeToast = true; CarPlayerBridge.sendEvent("playMode")
         }
-        btnRow.addView(modeBtn, lp(dp(40f).toInt(), dp(40f).toInt()))
-        btnRow.addView(space(dp(5f).toInt(), 0))
+        btnRow.addView(modeBtn, lp(dp(50f).toInt(), dp(50f).toInt()))
+        btnRow.addView(space(dp(6f).toInt(), 0))
         btnRow.addView(
-            circleIconButton(R.drawable.ic_kg_prev, 40f, 50f, 0) { CarPlayerBridge.sendEvent("prev") },
-            lp(dp(50f).toInt(), dp(50f).toInt())
+            circleIconButton(R.drawable.ic_kg_prev, 50f, 62f, 0) { CarPlayerBridge.sendEvent("prev") },
+            lp(dp(62f).toInt(), dp(62f).toInt())
         )
-        btnRow.addView(space(dp(5f).toInt(), 0))
+        btnRow.addView(space(dp(6f).toInt(), 0))
         val playWrap = FrameLayout(this)
         playBtn = ImageButton(this).apply {
             setBackgroundResource(R.drawable.bg_circle_white18)
             setImageResource(R.drawable.ic_kg_play)
             setColorFilter(0xFFFFFFFF.toInt())
             scaleType = ImageView.ScaleType.CENTER_INSIDE
-            val pad = dp(8f).toInt()
+            val pad = dp(10f).toInt()
             setPadding(pad, pad, pad, pad)
             setOnClickListener { CarPlayerBridge.sendEvent("playPause") }
         }
@@ -340,21 +340,21 @@ class CarPlayerActivity : Activity() {
             isIndeterminate = true
             visibility = View.GONE
         }
-        playWrap.addView(playBtn, FrameLayout.LayoutParams(dp(72f).toInt(), dp(72f).toInt()))
+        playWrap.addView(playBtn, FrameLayout.LayoutParams(dp(92f).toInt(), dp(92f).toInt()))
         playWrap.addView(
             playProgress,
-            FrameLayout.LayoutParams(dp(30f).toInt(), dp(30f).toInt(), Gravity.CENTER)
+            FrameLayout.LayoutParams(dp(38f).toInt(), dp(38f).toInt(), Gravity.CENTER)
         )
-        btnRow.addView(playWrap, lp(dp(72f).toInt(), dp(72f).toInt()))
-        btnRow.addView(space(dp(5f).toInt(), 0))
+        btnRow.addView(playWrap, lp(dp(92f).toInt(), dp(92f).toInt()))
+        btnRow.addView(space(dp(6f).toInt(), 0))
         btnRow.addView(
-            circleIconButton(R.drawable.ic_kg_next, 40f, 50f, 0) { CarPlayerBridge.sendEvent("next") },
+            circleIconButton(R.drawable.ic_kg_next, 50f, 62f, 0) { CarPlayerBridge.sendEvent("next") },
+            lp(dp(62f).toInt(), dp(62f).toInt())
+        )
+        btnRow.addView(space(dp(6f).toInt(), 0))
+        btnRow.addView(
+            circleIconButton(R.drawable.ic_kg_queue, 30f, 50f, 0) { showQueue() },
             lp(dp(50f).toInt(), dp(50f).toInt())
-        )
-        btnRow.addView(space(dp(5f).toInt(), 0))
-        btnRow.addView(
-            circleIconButton(R.drawable.ic_kg_queue, 24f, 40f, 0) { showQueue() },
-            lp(dp(40f).toInt(), dp(40f).toInt())
         )
         right.addView(btnRow, lpMatchWrap().also { it.topMargin = dp(4f).toInt() })
 
@@ -366,12 +366,12 @@ class CarPlayerActivity : Activity() {
 
         setContentView(root)
 
-        // 唱片在首帧按左栏实际尺寸构建（对齐 Flutter discSize = min(w,h)*0.9 clamp 150..330dp）
+        // 唱片在首帧按左栏实际尺寸构建（用户要求整体更大：上限从 Flutter 的 330dp 提到 440dp）
         discWrap.addOnLayoutChangeListener { v, _, _, _, _, _, _, _, _ ->
             val w = v.width; val h = v.height
             if (w <= 0 || h <= 0) return@addOnLayoutChangeListener
             val density = resources.displayMetrics.density
-            val sizePx = (minOf(w, h) * 0.9f).coerceIn(dp(150f), dp(330f)).toInt()
+            val sizePx = (minOf(w, h) * 0.9f).coerceIn(dp(150f), dp(440f)).toInt()
             if (sizePx != lastDiscSize) { lastDiscSize = sizePx; buildDisc(sizePx) }
         }
     }
