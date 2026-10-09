@@ -269,7 +269,8 @@ class _PlayerBodyState extends State<_PlayerBody> {
     // 不再有 Flutter 的每帧 surface 交换（与酷我原生 HWUI 同路，避免霸占弱车机 GPU）。
     // 关键：关闭原生页时 app_shell 的 reverse 动画期间本页仍在树上，若此处仍渲染
     // _LandscapePlayerContent 就会闪一帧 Flutter 全屏——所以车机下无条件返回纯黑宿主。
-    if (isCarLayout) {
+    // [TEMP-REF] 临时：禁用原生接管，让 Flutter 直接渲染 _LandscapePlayerContent 以截图取基准，验证完必须改回 `if (isCarLayout)`。
+    if (false && isCarLayout) {
       if (widget.player.currentSong != null &&
           !_carHandoff &&
           !_handoffSuppressed &&
