@@ -424,7 +424,7 @@ class CarPlayerActivity : Activity() {
     private fun lpWeight(weight: Float): LinearLayout.LayoutParams =
         LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, weight)
 
-    /** 构建 Flutter 风白色发光唱片：径向渐变盘体 + 同心环 + 中心封面 + 白点，整体随 discGroup 旋转。 */
+    /** 构建 Flutter 风深色黑胶唱片：径向渐变盘体 + 同心环 + 中心圆形封面，整体随 discGroup 旋转。 */
     private fun buildDisc(sizePx: Int) {
         discWrap.removeAllViews()
         discGroup = FrameLayout(this)
@@ -464,15 +464,6 @@ class CarPlayerActivity : Activity() {
         disc = cover
         val coverSize = (sizePx * 0.70f).toInt()
         discGroup.addView(cover, FrameLayout.LayoutParams(coverSize, coverSize, Gravity.CENTER))
-
-        val dot = View(this).apply {
-            background = GradientDrawable().apply {
-                shape = GradientDrawable.OVAL
-                setColor(0xD1FFFFFF.toInt())
-            }
-        }
-        val dd = (sizePx * 0.08f).toInt().coerceAtLeast(dp(8f).toInt())
-        discGroup.addView(dot, FrameLayout.LayoutParams(dd, dd, Gravity.CENTER))
 
         discWrap.addView(discGroup, FrameLayout.LayoutParams(sizePx, sizePx, Gravity.CENTER))
 
@@ -994,22 +985,28 @@ class CarPlayerActivity : Activity() {
 
     /**
      * 把封面裁成正圆并预抗锯齿：用 BitmapShader 填充一个带 AA+双线性采样的圆，
-     * 2x 超采样后交 ImageView 缩放，使旋转唱片时圆周边缘依旧平滑(替代 clipToOutline 的硬边锯齿)。
+     * 高倍超采样 + 圆半径内缩(留出 AA 余量)后交 ImageView 缩放，
+     * 使圆边不被画布边界裁成硬边、旋转唱片时边缘依旧平滑(替代 clipToOutline 的硬边锯齿)。
      */
     private fun circleize(src: Bitmap): Bitmap {
         val side = min(src.width, src.height)
-        val n = (side * 2).coerceIn(240, 720)
+        // 足够高的超采样让圆边在高分屏/旋转时依旧细腻
+        val n = (side * 3).coerceIn(480, 1440)
         val out = Bitmap.createBitmap(n, n, Bitmap.Config.ARGB_8888)
         val c = Canvas(out)
         val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
         val shader = BitmapShader(src, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP)
         val m = Matrix()
-        val s = n.toFloat() / side
+        // 关键：圆半径内缩 pad，给抗锯齿过渡带留出画布余量，
+        // 否则圆与画布四边相切处 AA 被裁掉→上下左右呈硬边/锯齿。
+        val pad = 3f
+        val r = n / 2f - pad
+        val s = (r * 2f) / side
         m.setScale(s, s)
         m.postTranslate((n - src.width * s) / 2f, (n - src.height * s) / 2f)
         shader.setLocalMatrix(m)
         paint.shader = shader
-        c.drawCircle(n / 2f, n / 2f, n / 2f, paint)
+        c.drawCircle(n / 2f, n / 2f, r, paint)
         return out
     }
 
