@@ -18,6 +18,12 @@ class Artwork extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final imageUrl = url;
+    // 按实际显示尺寸×设备像素比限制解码宽度，避免车机/平板弱 GPU 上全尺寸解码导致首帧卡顿；
+    // 仅设 cacheWidth（保持宽高比），视觉无差别。size 为无穷时不限制。
+    final capDecode = size.isFinite;
+    final cacheW = capDecode
+        ? (size * MediaQuery.devicePixelRatioOf(context)).clamp(1, 2048).round()
+        : null;
     final child = imageUrl == null
         ? _Fallback(icon: icon)
         : imageUrl.startsWith('content://')
@@ -30,6 +36,7 @@ class Artwork extends StatelessWidget {
             : Image.network(
                 imageUrl,
                 fit: BoxFit.cover,
+                cacheWidth: cacheW,
                 errorBuilder: (context, error, stackTrace) =>
                     _Fallback(icon: icon),
                 loadingBuilder: (context, child, progress) {
@@ -125,7 +132,12 @@ class _ContentUriImageState extends State<_ContentUriImage> {
     if (_bytes == null) {
       return _Fallback(icon: widget.icon);
     }
-    return Image.memory(_bytes!, fit: BoxFit.cover);
+    final capW = widget.size.isFinite
+        ? (widget.size * MediaQuery.devicePixelRatioOf(context))
+            .clamp(1, 2048)
+            .round()
+        : null;
+    return Image.memory(_bytes!, fit: BoxFit.cover, cacheWidth: capW);
   }
 }
 
