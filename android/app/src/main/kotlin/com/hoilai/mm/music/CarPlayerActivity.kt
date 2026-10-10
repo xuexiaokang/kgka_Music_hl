@@ -385,12 +385,11 @@ class CarPlayerActivity : Activity() {
 
         setContentView(root)
 
-        // 唱片在首帧按左栏实际尺寸构建（用户要求整体更大：上限从 Flutter 的 330dp 提到 440dp）
+        // 唱片在首帧按左栏实际尺寸构建（用户要求整体缩小 20%：系数 0.9→0.72、上限 440→352、下限 150→120）
         discWrap.addOnLayoutChangeListener { v, _, _, _, _, _, _, _, _ ->
             val w = v.width; val h = v.height
             if (w <= 0 || h <= 0) return@addOnLayoutChangeListener
-            val density = resources.displayMetrics.density
-            val sizePx = (minOf(w, h) * 0.9f).coerceIn(dp(150f), dp(440f)).toInt()
+            val sizePx = (minOf(w, h) * 0.72f).coerceIn(dp(120f), dp(352f)).toInt()
             if (sizePx != lastDiscSize) { lastDiscSize = sizePx; buildDisc(sizePx) }
         }
     }
@@ -1277,7 +1276,15 @@ class CarPlayerActivity : Activity() {
             duration = 32000L
             repeatCount = ValueAnimator.INFINITE
             interpolator = LinearInterpolator()
-            addUpdateListener { discGroup.rotation = it.animatedValue as Float }
+            // 32s 转一圈极慢,30fps 已足够顺;把角度更新节流到 ~30fps,减少旋转硬件层的变换刷新(降 GPU)
+            var last = 0L
+            addUpdateListener {
+                val now = android.os.SystemClock.uptimeMillis()
+                if (now - last >= 33L) {
+                    last = now
+                    discGroup.rotation = it.animatedValue as Float
+                }
+            }
             start()
         }
     }
@@ -1365,8 +1372,8 @@ class CarPlayerActivity : Activity() {
      */
     private fun circleize(src: Bitmap): Bitmap {
         val side = min(src.width, src.height)
-        // 足够高的超采样让圆边在高分屏/旋转时依旧细腻
-        val n = (side * 3).coerceIn(480, 1440)
+        // 超采样按缩小后的圆盘显示尺寸取 ~2x 即可（1024 上限省一半纹理内存/GPU 采样）
+        val n = (side * 2).coerceIn(360, 1024)
         val out = Bitmap.createBitmap(n, n, Bitmap.Config.ARGB_8888)
         val c = Canvas(out)
         val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
