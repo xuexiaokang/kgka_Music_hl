@@ -1237,7 +1237,9 @@ class _LandscapeLyricPanelState extends State<_LandscapeLyricPanel> {
 
     return ExcludeSemantics(
       // 歌词视图高频更新会触发 Windows AXTree 竞态崩溃，排除语义树
-      child: LyricView(
+      child: RepaintBoundary(
+        // 把歌词的高频重绘隔离在歌词区，避免连带重栅格唱片/背景层。
+        child: LyricView(
         controller: _lyricController,
         style: LyricStyles.default1.copyWith(
           textStyle: Theme.of(context).textTheme.titleLarge!.copyWith(
@@ -1257,11 +1259,15 @@ class _LandscapeLyricPanelState extends State<_LandscapeLyricPanel> {
             horizontal: 24,
             vertical: widget.compact ? 20 : 40,
           ),
-          fadeRange: FadeRange(top: 40, bottom: 40),
+          // fadeRange=null：关掉 flutter_lyric 的整屏 ShaderMask(dstIn 离屏混合)，
+          // 每帧省一次全屏离屏合成。渐隐靠非当前行文字 alpha(.34) 已足够，
+          // 与原生酷我不pay整屏mask的渲染纪律对齐。
+          fadeRange: null,
           textAlign: TextAlign.left,
           contentAlignment: CrossAxisAlignment.start,
           activeHighlightColor: Colors.white,
         ),
+      ),
       ),
     );
   }
@@ -2171,7 +2177,8 @@ class _LyricViewportState extends State<_LyricViewport> {
       ),
       anchorPosition: _lyricAnchorFraction,
       activeAnchorPosition: _lyricAnchorFraction,
-      fadeRange: FadeRange(top: 40, bottom: 40),
+      // fadeRange=null：关掉 wrapMaskIfNeed 的整屏 ShaderMask 离屏混合，每帧省一次全屏合成。
+      fadeRange: null,
       textAlign: TextAlign.left,
       contentAlignment: CrossAxisAlignment.start,
       activeHighlightColor: Colors.white,
@@ -2185,11 +2192,14 @@ class _LyricViewportState extends State<_LyricViewport> {
 
     return ExcludeSemantics(
       // 歌词视图高频更新会触发 Windows AXTree 竞态崩溃，排除语义树
-      child: BlurredLyricView(
-        controller: _lyricController,
-        style: lyricStyle,
-        maxBlurSigma: maxBlurSigma,
-        blurStep: blurStep,
+      child: RepaintBoundary(
+        // 把歌词的高频重绘隔离在歌词区，避免连带重栅格背景层。
+        child: BlurredLyricView(
+          controller: _lyricController,
+          style: lyricStyle,
+          maxBlurSigma: maxBlurSigma,
+          blurStep: blurStep,
+        ),
       ),
     );
   }
