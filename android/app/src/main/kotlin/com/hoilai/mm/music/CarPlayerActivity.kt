@@ -1376,12 +1376,23 @@ class CarPlayerActivity : Activity() {
         // 否则圆与画布四边相切处 AA 被裁掉→上下左右呈硬边/锯齿。
         val pad = 3f
         val r = n / 2f - pad
-        val s = (r * 2f) / side
+        // 方形封面自带浅色/白色印刷边：若圆按短边内切(直径=短边)，圆周正好压在方形四边中点上
+        // →上下左右漏出白边。让圆只采样原图中心约 89% 区域(把图放大 zoom 倍溢出圆外)，
+        // 将封面自带的亮/白边裁到可见圆之外。
+        val zoom = 1.12f
+        val s = (r * 2f) / side * zoom
         m.setScale(s, s)
         m.postTranslate((n - src.width * s) / 2f, (n - src.height * s) / 2f)
         shader.setLocalMatrix(m)
         paint.shader = shader
         c.drawCircle(n / 2f, n / 2f, r, paint)
+        // 边缘压一圈极细暗色描边：消除抗锯齿亮边、并把封面边界自然融进黑色黑胶，杜绝残余白边。
+        val rim = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            strokeWidth = n * 0.014f
+            color = 0x99000000.toInt()
+        }
+        c.drawCircle(n / 2f, n / 2f, r - rim.strokeWidth / 2f, rim)
         return out
     }
 
