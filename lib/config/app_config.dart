@@ -5,7 +5,7 @@ class AppConfig {
 
   static const appName = 'KA Music';
   static const appVersion = '2026.10.10';
-  static const appVersionCode = '20261010';
+  static const appVersionCode = '1';
 
   static const _defaultApiBaseUrl = 'https://music.api.hoilai.cn';
   static const _customBaseUrlKey = 'settings.custom_api_base_url';
