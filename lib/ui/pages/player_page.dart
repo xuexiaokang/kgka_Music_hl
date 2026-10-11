@@ -18,6 +18,7 @@ import '../../controllers/player_controller.dart';
 import '../../controllers/theme_controller.dart';
 import '../../models/music_models.dart';
 import '../../services/lyric_converter.dart';
+import '../../services/car_player_service.dart';
 import '../widgets/audio_effects_sheet.dart';
 import '../widgets/audio_quality_sheet.dart';
 import '../widgets/blurred_lyric_view.dart';
@@ -210,11 +211,36 @@ class _PlayerBodyState extends State<_PlayerBody> {
   var _pageScrolling = false;
   bool? _lastSystemUiLandscape;
 
+  // 车机全屏 → 全原生 CarPlayerActivity 接管（Flutter 被覆盖后停帧）
+  bool _carHandoff = false;
+  bool _handoffSuppressed = false; // 用户手动关掉原生页后，本次不再自动接管
+  bool _handoffScheduled = false;
+
   bool get _lyricPageVisible => _page == 1 || _pageScrolling;
+
+  @override
+  void initState() {
+    super.initState();
+    CarPlayerService.instance.onClosed(() {
+      if (!mounted) return;
+      setState(() {
+        _carHandoff = false;
+        _handoffSuppressed = true;
+        _handoffScheduled = false;
+      });
+      // 关闭原生页 = 用户想退出全屏：直接关掉整个全屏播放器回到列表/首页，
+      // 不回落到会掉帧的 Flutter 横屏界面（否则等于白改）。
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        widget.onClose();
+      });
+    });
+  }
 
   @override
   void dispose() {
     _pageController.dispose();
+    CarPlayerService.instance.close();
     super.dispose();
   }
 
@@ -231,6 +257,47 @@ class _PlayerBodyState extends State<_PlayerBody> {
     _syncSystemUi(landscape);
     // 横屏分栏布局是车机专属，普通横屏仍用竖屏的翻页布局。
     final isCarLayout = landscape && ThemeController.instance.carModeEnabled;
+
+    // 离开车机横屏（如旋回竖屏）时，收掉原生页，回落到 Flutter 竖屏播放器。
+    if (!isCarLayout && _carHandoff) {
+      CarPlayerService.instance.dismissNative();
+      CarPlayerService.instance.close();
+      _carHandoff = false;
+    }
+    // 车机横屏：Flutter 侧只作为"拉起并承载原生全屏 CarPlayerActivity"的隐形宿主，
+    // 绝不绘制 Flutter 版全屏播放器。原生页覆盖 FlutterActivity 后引擎停帧，全屏期间
+    // 不再有 Flutter 的每帧 surface 交换（与酷我原生 HWUI 同路，避免霸占弱车机 GPU）。
+    // 关键：关闭原生页时 app_shell 的 reverse 动画期间本页仍在树上，若此处仍渲染
+    // _LandscapePlayerContent 就会闪一帧 Flutter 全屏——所以车机下无条件返回纯黑宿主。
+    if (isCarLayout) {
+      if (widget.player.currentSong != null &&
+          !_carHandoff &&
+          !_handoffSuppressed &&
+          !_handoffScheduled) {
+        _handoffScheduled = true;
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted) return;
+          final cs = Theme.of(context).colorScheme;
+          CarPlayerService.instance.open(
+            widget.player,
+            widget.auth,
+            theme: {
+              'isDark': Theme.of(context).brightness == Brightness.dark,
+              'surface': cs.surface.value,
+              'primary': cs.primary.value,
+              'onSurface': cs.onSurface.value,
+              'onSurfaceVariant': cs.onSurfaceVariant.value,
+              'outlineVariant': cs.outlineVariant.value,
+              'error': cs.error.value,
+              'surfaceContainer': cs.surfaceContainer.value,
+              'surfaceContainerHighest': cs.surfaceContainerHighest.value,
+            },
+          );
+          setState(() => _carHandoff = CarPlayerService.instance.isActive);
+        });
+      }
+      return const Scaffold(backgroundColor: Colors.black, body: SizedBox.shrink());
+    }
 
     return StatusBarOverlay(
       brightness: Brightness.dark,
@@ -1113,30 +1180,26 @@ class _LandscapeLyricPanel extends StatefulWidget {
 }
 
 class _LandscapeLyricPanelState extends State<_LandscapeLyricPanel> {
-  late final LyricController _lyricController;
+  MethodChannel? _channel;
   late final Ticker _ticker;
-  bool _isUserSelecting = false;
+  bool _created = false;
   /// 已加载歌词的快照：用于区分"歌词为空但准备中"与"歌词为空且加载完成"。
   List<LyricLine> _loadedLyrics = const [];
   /// 上次的准备状态快照：isPreparing 变化时也要刷新（"正在准备音乐..."->"暂无歌词"）。
   bool _lastPreparing = false;
+  int _lastSentMs = -1;
 
   @override
   void initState() {
     super.initState();
     _loadedLyrics = widget.lyrics;
     _lastPreparing = widget.player.isPreparing;
-    _lyricController = LyricController();
-    _lyricController.setOnTapLineCallback((position) {
-      widget.player.seek(position);
-    });
-    _lyricController.isSelectingNotifier.addListener(_onSelectingChanged);
+    _ticker = Ticker(_onTick);
     // 车机全屏布局下，歌词并非由父级 rebuild 传入（_PlayerPage 仅在
     // currentSong 变化时 setState），切歌后 isPreparing/lyrics 的后续变化
     // 必须由本组件自己监听 player，否则歌词会一直卡在"正在准备音乐..."。
     widget.player.addListener(_onPlayerChanged);
     _syncLyrics();
-    _ticker = Ticker(_onTick);
     _syncTicker();
   }
 
@@ -1158,15 +1221,8 @@ class _LandscapeLyricPanelState extends State<_LandscapeLyricPanel> {
   @override
   void dispose() {
     widget.player.removeListener(_onPlayerChanged);
-    _lyricController.isSelectingNotifier.removeListener(_onSelectingChanged);
     _ticker.dispose();
-    _lyricController.dispose();
     super.dispose();
-  }
-
-  void _onSelectingChanged() {
-    _isUserSelecting = _lyricController.isSelectingNotifier.value;
-    _syncTicker();
   }
 
   /// player 状态变化（切歌/加载完成/歌词到达）时自动刷新，不依赖父级 rebuild。
@@ -1189,18 +1245,40 @@ class _LandscapeLyricPanelState extends State<_LandscapeLyricPanel> {
 
   void _syncLyrics() {
     final lyrics = _loadedLyrics;
-    if (lyrics.isNotEmpty) {
-      final model = convertToFlutterLyricModel(lyrics);
-      _lyricController.loadLyricModel(model);
+    if (_created && lyrics.isNotEmpty) {
+      _channel?.invokeMethod<void>('setLyrics', _encodeLyrics(lyrics));
+      _pushProgress(widget.player.smoothPosition);
     }
+  }
+
+  /// 把 models.LyricLine 列表编码成原生 CarLyricView 需要的结构。
+  List<Map<String, dynamic>> _encodeLyrics(List<LyricLine> lyrics) {
+    return [
+      for (var i = 0; i < lyrics.length; i++)
+        {
+          'text': lyrics[i].text,
+          'translation': lyrics[i].translation,
+          'startMs': lyrics[i].time.inMilliseconds,
+          'endMs': i + 1 < lyrics.length
+              ? lyrics[i + 1].time.inMilliseconds
+              : lyrics[i].time.inMilliseconds + 5000,
+          'words': [
+            for (final w in lyrics[i].words)
+              {
+                'text': w.text,
+                'startMs': w.time.inMilliseconds,
+                'endMs': (w.time + w.duration).inMilliseconds,
+              },
+          ],
+        },
+    ];
   }
 
   void _syncTicker() {
     final shouldTick =
         widget.player.isPlaying &&
         _loadedLyrics.isNotEmpty &&
-        !widget.player.isScrubbing &&
-        !_isUserSelecting;
+        !widget.player.isScrubbing;
     if (shouldTick && !_ticker.isActive) {
       _ticker.start();
     } else if (!shouldTick && _ticker.isActive) {
@@ -1212,7 +1290,42 @@ class _LandscapeLyricPanelState extends State<_LandscapeLyricPanel> {
     if (!mounted || widget.player.isScrubbing) {
       return;
     }
-    _lyricController.setProgress(widget.player.smoothPosition);
+    _pushProgress(widget.player.smoothPosition);
+  }
+
+  void _pushProgress(Duration position) {
+    final ms = position.inMilliseconds;
+    if (ms == _lastSentMs) return;
+    _lastSentMs = ms;
+    _channel?.invokeMethod<void>('setProgress', ms);
+  }
+
+  Map<String, dynamic> _styleParams() {
+    final compact = widget.compact;
+    return {
+      'activeSizeSp': compact ? 26.0 : 34.0,
+      'inactiveSizeSp': compact ? 18.0 : 24.0,
+      'translationSizeSp': 15.0,
+      'lineGapDp': compact ? 10.0 : 16.0,
+      'paddingHorizontalDp': 24.0,
+      'paddingVerticalDp': compact ? 20.0 : 40.0,
+      // 与旧 flutter_lyric 车机样式一致：非当前行白 alpha .34，当前行纯白高亮
+      'baseColor': 0x57FFFFFF,
+      'activeColor': 0xFFFFFFFF.toInt(),
+      'transColor': 0x3DFFFFFF,
+      'showTranslation': true,
+    };
+  }
+
+  void _onViewCreated(int id) {
+    _channel = MethodChannel('ka.car_lyric_view/$id');
+    _created = true;
+    // 首帧：灌歌词 + 当前进度
+    if (_loadedLyrics.isNotEmpty) {
+      _channel?.invokeMethod<void>('setLyrics', _encodeLyrics(_loadedLyrics));
+      _pushProgress(widget.player.smoothPosition);
+    }
+    _syncTicker();
   }
 
   @override
@@ -1232,42 +1345,14 @@ class _LandscapeLyricPanelState extends State<_LandscapeLyricPanel> {
       );
     }
 
-    final fontSize = widget.compact ? 26.0 : 34.0;
-    final inactiveFontSize = widget.compact ? 18.0 : 24.0;
-
+    // 原生 PlatformView 承载歌词：渲染走 HWUI/Skia，与酷我同路，避免 Flutter
+    // 每帧重栅格整块歌词层而饿死并发的浮窗视频。
     return ExcludeSemantics(
-      // 歌词视图高频更新会触发 Windows AXTree 竞态崩溃，排除语义树
-      child: RepaintBoundary(
-        // 把歌词的高频重绘隔离在歌词区，避免连带重栅格唱片/背景层。
-        child: LyricView(
-        controller: _lyricController,
-        style: LyricStyles.default1.copyWith(
-          textStyle: Theme.of(context).textTheme.titleLarge!.copyWith(
-            color: Colors.white.withValues(alpha: .34),
-            fontSize: inactiveFontSize,
-            height: 1.18,
-            fontWeight: FontWeight.w800,
-          ),
-          activeStyle: Theme.of(context).textTheme.headlineMedium!.copyWith(
-            color: Colors.white.withValues(alpha: .34),
-            fontSize: fontSize,
-            height: 1.18,
-            fontWeight: FontWeight.w900,
-          ),
-          lineGap: widget.compact ? 10 : 16,
-          contentPadding: EdgeInsets.symmetric(
-            horizontal: 24,
-            vertical: widget.compact ? 20 : 40,
-          ),
-          // fadeRange=null：关掉 flutter_lyric 的整屏 ShaderMask(dstIn 离屏混合)，
-          // 每帧省一次全屏离屏合成。渐隐靠非当前行文字 alpha(.34) 已足够，
-          // 与原生酷我不pay整屏mask的渲染纪律对齐。
-          fadeRange: null,
-          textAlign: TextAlign.left,
-          contentAlignment: CrossAxisAlignment.start,
-          activeHighlightColor: Colors.white,
-        ),
-      ),
+      child: AndroidView(
+        viewType: 'ka.car_lyric_view',
+        creationParams: _styleParams(),
+        creationParamsCodec: const StandardMessageCodec(),
+        onPlatformViewCreated: _onViewCreated,
       ),
     );
   }
