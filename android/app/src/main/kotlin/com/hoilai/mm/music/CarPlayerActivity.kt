@@ -385,12 +385,11 @@ class CarPlayerActivity : Activity() {
 
         setContentView(root)
 
-        // 唱片在首帧按左栏实际尺寸构建（用户要求整体更大：上限从 Flutter 的 330dp 提到 440dp）
+        // 唱片在首帧按左栏实际尺寸构建（用户要求整体缩小 20%：系数 0.9→0.72、上限 440→352、下限 150→120）
         discWrap.addOnLayoutChangeListener { v, _, _, _, _, _, _, _, _ ->
             val w = v.width; val h = v.height
             if (w <= 0 || h <= 0) return@addOnLayoutChangeListener
-            val density = resources.displayMetrics.density
-            val sizePx = (minOf(w, h) * 0.9f).coerceIn(dp(150f), dp(440f)).toInt()
+            val sizePx = (minOf(w, h) * 0.72f).coerceIn(dp(120f), dp(352f)).toInt()
             if (sizePx != lastDiscSize) { lastDiscSize = sizePx; buildDisc(sizePx) }
         }
     }
@@ -615,10 +614,9 @@ class CarPlayerActivity : Activity() {
                 layoutParams = LinearLayout.LayoutParams(
                     LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
             }
-            // 封面缩略图 40dp，圆角 8（预渲染，无索引号）
+            // 封面缩略图 40dp，圆角 8（预渲染，无索引号；显示真实封面，不做着色）
             val thumb = ImageView(this).apply {
                 scaleType = ImageView.ScaleType.FIT_XY
-                setColorFilter(thPrimary)
             }
             row.addView(thumb, LinearLayout.LayoutParams(dp(40f).toInt(), dp(40f).toInt()).also {
                 it.marginEnd = dp(14f).toInt()
@@ -718,11 +716,22 @@ class CarPlayerActivity : Activity() {
 
     // --------------------------------------------------------- 更多面板
 
-    /** 一行：主标题 + 可选右侧（当前值/开关态）；点击触发 onClick。 */
-    private class Row(val label: String, val trailing: String? = null, val selected: Boolean = false, val onClick: () -> Unit)
+    /** 一行：可选图标 + 主标题 + 可选副标题 + 选中态；点击触发 onClick。 */
+    private class Row(
+        val label: String,
+        val subtitle: String? = null,
+        val icon: Int = 0,
+        val selected: Boolean = false,
+        val onClick: () -> Unit
+    )
 
-    /** 通用原生底部弹层（不新建 Activity/task，避免车机出现第二窗口 / Flutter 闪屏）。 */
-    private fun openSheet(title: String, rows: List<Row>) {
+    /**
+     * 通用原生底部弹层，1:1 复刻 Flutter showModalBottomSheet：拖拽把手(32x4) +
+     * 标题(22sp w900) + 可选副标题(14sp) + 圆角 16 surfaceContainer 卡片（行=图标/标题/
+     * 副标题/尾部勾选，行间 Divider indent 58）。不新建 Activity/task，避免车机出现第二窗口 /
+     * Flutter 闪屏。行点击先关面板再执行 onClick。
+     */
+    private fun openSheet(title: String, rows: List<Row>, subtitle: String? = null) {
         closeSheet()
         val scrim = FrameLayout(this).apply {
             setBackgroundColor(0x99000000.toInt())
@@ -732,57 +741,74 @@ class CarPlayerActivity : Activity() {
                 FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT
             )
         }
+        // 面板：底部对齐，顶部圆角 28dp，底色 surface
+        val rad = dp(28f)
         val panel = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            background = resources.getDrawable(R.drawable.kg_queue_panel_bg, null)
-            setPadding(dp(20f).toInt(), dp(14f).toInt(), dp(20f).toInt(), dp(6f).toInt())
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.RECTANGLE
+                setColor(thSurface)
+                cornerRadii = floatArrayOf(rad, rad, rad, rad, 0f, 0f, 0f, 0f)
+            }
             layoutParams = FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT
             ).also { it.gravity = Gravity.BOTTOM }
             isClickable = true
         }
-        panel.addView(TextView(this).apply {
-            text = title; setTextColor(Color.WHITE); textSize = 17f
-            setTypeface(typeface, android.graphics.Typeface.BOLD)
-            setPadding(dp(4f).toInt(), 0, dp(4f).toInt(), dp(10f).toInt())
+        // 拖拽把手：32x4，水平居中，色 outlineVariant
+        panel.addView(View(this).apply {
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.RECTANGLE
+                setColor(thOutlineVariant)
+                cornerRadius = dp(2f)
+            }
+        }, LinearLayout.LayoutParams(dp(32f).toInt(), dp(4f).toInt()).also {
+            it.gravity = Gravity.CENTER_HORIZONTAL
+            it.topMargin = dp(10f).toInt(); it.bottomMargin = dp(6f).toInt()
         })
-        val scroll = ScrollView(this)
-        val list = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        rows.forEach { r ->
-            val row = LinearLayout(this).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER_VERTICAL
-                setPadding(dp(4f).toInt(), dp(14f).toInt(), dp(4f).toInt(), dp(14f).toInt())
-                layoutParams = LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
-            }
-            row.addView(TextView(this).apply {
-                text = r.label; textSize = 16f
-                setTextColor(if (r.selected) ACCENT else Color.WHITE)
-            }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
-            if (r.trailing != null) {
-                row.addView(TextView(this).apply {
-                    text = r.trailing; textSize = 14f
-                    setTextColor(if (r.selected) ACCENT else 0xFF9A9AA0.toInt())
-                })
-            }
-            row.setOnClickListener { r.onClick() }
-            list.addView(row)
-            list.addView(View(this).apply {
-                setBackgroundColor(0x1FFFFFFF)
-                layoutParams = LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.MATCH_PARENT, 1)
-            })
+        // 内容区：Padding(16,0,16,18)
+        val content = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(16f).toInt(), 0, dp(16f).toInt(), dp(18f).toInt())
         }
-        scroll.addView(list, LinearLayout.LayoutParams(
+        content.addView(TextView(this).apply {
+            text = title; setTextColor(thOnSurface); textSize = 22f
+            setTypeface(typeface, android.graphics.Typeface.BOLD)
+        })
+        if (subtitle != null) {
+            content.addView(TextView(this).apply {
+                text = subtitle; setTextColor(thOnSurfaceVariant); textSize = 14f
+            }, LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
+            ).also { it.topMargin = dp(4f).toInt() })
+        }
+        content.addView(View(this), LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT, dp(12f).toInt()))
+        // 圆角 16 surfaceContainer 卡片承载列表，内部可滚动
+        val scroll = ScrollView(this).apply { isVerticalScrollBarEnabled = false }
+        val card = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.RECTANGLE
+                setColor(thSurfaceContainer)
+                cornerRadius = dp(16f)
+            }
+        }
+        rows.forEachIndexed { idx, r ->
+            card.addView(sheetRow(r))
+            if (idx < rows.size - 1) card.addView(sheetDivider())
+        }
+        scroll.addView(card, LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
-        panel.addView(scroll, LinearLayout.LayoutParams(
+        content.addView(scroll, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
+        panel.addView(content, LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
         scrim.addView(panel)
         root.addView(scrim)
         sheet = scrim
-        // 横屏车机高度有限：列表过长时限高到屏高 75%，让内部 ScrollView 生效；短列表不填充。
-        val maxH = (resources.displayMetrics.heightPixels * 0.75f).toInt()
+        // 横屏车机高度有限：列表过长时限高到屏高 80%，让内部 ScrollView 生效；短列表不填充。
+        val maxH = (resources.displayMetrics.heightPixels * 0.80f).toInt()
         panel.viewTreeObserver.addOnGlobalLayoutListener(object :
             android.view.ViewTreeObserver.OnGlobalLayoutListener {
             override fun onGlobalLayout() {
@@ -800,6 +826,57 @@ class CarPlayerActivity : Activity() {
                 }
             }
         })
+    }
+
+    /** 卡片内一行：[图标 24 tint onSurface] + [标题 16 / 副标题 14 onSurfaceVariant] + [尾部勾选 24 tint primary]。 */
+    private fun sheetRow(r: Row): LinearLayout {
+        val h = dp(16f).toInt()
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(h, dp(14f).toInt(), h, dp(14f).toInt())
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+            isClickable = true
+        }
+        if (r.icon != 0) {
+            row.addView(ImageView(this).apply {
+                setImageResource(r.icon); setColorFilter(thOnSurface)
+            }, LinearLayout.LayoutParams(dp(24f).toInt(), dp(24f).toInt()).also {
+                it.marginEnd = dp(16f).toInt()
+            })
+        }
+        val textCol = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        textCol.addView(TextView(this).apply {
+            text = r.label; setTextColor(thOnSurface); textSize = 16f
+            maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END
+        })
+        if (r.subtitle != null) {
+            textCol.addView(TextView(this).apply {
+                text = r.subtitle; setTextColor(thOnSurfaceVariant); textSize = 14f
+                maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END
+            }, LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
+            ).also { it.topMargin = dp(2f).toInt() })
+        }
+        row.addView(textCol, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        if (r.selected) {
+            row.addView(ImageView(this).apply {
+                setImageResource(R.drawable.ic_ms_check); setColorFilter(thPrimary)
+            }, LinearLayout.LayoutParams(dp(24f).toInt(), dp(24f).toInt()).also {
+                it.marginStart = dp(12f).toInt()
+            })
+        }
+        row.setOnClickListener { closeSheet(); r.onClick() }
+        return row
+    }
+
+    /** Flutter Divider(height:1, indent:58)：左缩进 58dp 对齐标题列。 */
+    private fun sheetDivider(): View = View(this).apply {
+        setBackgroundColor(thOutlineVariant)
+        layoutParams = LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT, 1
+        ).also { it.marginStart = dp(58f).toInt() }
     }
 
     private fun closeSheet() {
@@ -876,30 +953,42 @@ class CarPlayerActivity : Activity() {
         // 磁贴列表（2 列网格，行内等宽 + 10dp 间距，磁贴高≈宽/1.35）
         val tiles = ArrayList<Tile>()
         tiles.add(Tile(R.drawable.ic_ms_speed, "倍速播放", speedLabel) {
-            openSheet("倍速播放", listOf(0.5, 0.75, 1.0, 1.25, 1.5, 2.0).map { v ->
-                Row(speedText(v), selected = kotlin.math.abs(v - speed) < 0.001) {
-                    CarPlayerBridge.sendEvent("setSpeed", mapOf("speed" to v)); closeSheet()
+            openSheet("倍速播放", listOf(0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 3.0).map { v ->
+                Row(speedText(v), icon = R.drawable.ic_ms_speed,
+                    selected = kotlin.math.abs(v - speed) < 0.001) {
+                    CarPlayerBridge.sendEvent("setSpeed", mapOf("speed" to v))
                 }
-            })
+            }, subtitle = "调整音乐播放速度")
         })
         tiles.add(Tile(R.drawable.ic_ms_high_quality, "音质：$qualityLabel", "切换当前播放音质") {
-            val opts = listOf("标准音质", "高品音质", "无损音质")
-            openSheet("切换音质", opts.mapIndexed { i, name ->
-                Row(name, selected = i == qualityIndex) {
-                    CarPlayerBridge.sendEvent("setQuality", mapOf("qualityIndex" to i)); closeSheet()
+            openSheet("切换音质", listOf(
+                Row("标准音质", "128K", R.drawable.ic_ms_music_note, selected = qualityIndex == 0) {
+                    CarPlayerBridge.sendEvent("setQuality", mapOf("qualityIndex" to 0))
+                },
+                Row("高品音质", "320K", R.drawable.ic_ms_high_quality, selected = qualityIndex == 1) {
+                    CarPlayerBridge.sendEvent("setQuality", mapOf("qualityIndex" to 1))
+                },
+                Row("无损音质", "FLAC", R.drawable.ic_ms_graphic_eq, selected = qualityIndex == 2) {
+                    CarPlayerBridge.sendEvent("setQuality", mapOf("qualityIndex" to 2))
                 }
-            })
+            ), subtitle = "会重新加载当前歌曲并尽量保持播放进度")
         })
         tiles.add(Tile(R.drawable.ic_ms_auto_awesome, "试听高潮", "播放歌曲高潮片段") {
             CarPlayerBridge.sendEvent("climax")
         })
         if (effectsSupported && effectNames.isNotEmpty()) {
             tiles.add(Tile(R.drawable.ic_ms_graphic_eq, "音效", effectLabel) {
-                openSheet("音效", effectNames.map { name ->
-                    Row(name, selected = effectLabel.contains(name)) {
-                        CarPlayerBridge.sendEvent("setEffect", mapOf("name" to name)); closeSheet()
-                    }
+                val rows = ArrayList<Row>()
+                rows.add(Row("关闭", icon = R.drawable.ic_ms_power, selected = effectLabel == "关闭") {
+                    CarPlayerBridge.sendEvent("setEffect", mapOf("off" to true))
                 })
+                effectNames.forEach { name ->
+                    rows.add(Row(name, icon = R.drawable.ic_ms_tune,
+                        selected = effectLabel.contains(name)) {
+                        CarPlayerBridge.sendEvent("setEffect", mapOf("name" to name))
+                    })
+                }
+                openSheet("音效", rows, subtitle = "选择音效预设")
             })
         }
         tiles.add(Tile(R.drawable.ic_ms_playlist_add, "下一首播放", "添加到播放队列") {
@@ -907,18 +996,19 @@ class CarPlayerActivity : Activity() {
         })
         tiles.add(Tile(R.drawable.ic_ms_bedtime, "定时播放", sleepSubtitle()) {
             openSheet("定时播放", listOf(
-                Row("不开启", selected = !sleepActive) {
-                    CarPlayerBridge.sendEvent("sleepTimer", mapOf("minutes" to 0)); closeSheet()
+                Row("不开启", icon = R.drawable.ic_ms_power,
+                    selected = !sleepActive && !sleepFinishCurrent) {
+                    CarPlayerBridge.sendEvent("sleepTimer", mapOf("minutes" to 0))
                 },
-                Row("播完当前单曲", selected = sleepFinishCurrent) {
-                    CarPlayerBridge.sendEvent("sleepTimer", mapOf("finishCurrent" to true)); closeSheet()
+                Row("播完当前单曲", icon = R.drawable.ic_ms_bedtime, selected = sleepFinishCurrent) {
+                    CarPlayerBridge.sendEvent("sleepTimer", mapOf("finishCurrent" to true))
                 },
-                *listOf(15, 30, 45, 60).map { m ->
-                    Row("$m 分钟") {
-                        CarPlayerBridge.sendEvent("sleepTimer", mapOf("minutes" to m)); closeSheet()
+                *listOf(15, 30, 45, 60, 90).map { m ->
+                    Row("$m 分钟", icon = R.drawable.ic_ms_timer) {
+                        CarPlayerBridge.sendEvent("sleepTimer", mapOf("minutes" to m))
                     }
                 }.toTypedArray()
-            ))
+            ), subtitle = "定时结束后自动暂停播放")
         })
         if (desktopLyricsSupported) {
             tiles.add(Tile(R.drawable.ic_ms_lyrics, "桌面歌词",
@@ -1186,7 +1276,15 @@ class CarPlayerActivity : Activity() {
             duration = 32000L
             repeatCount = ValueAnimator.INFINITE
             interpolator = LinearInterpolator()
-            addUpdateListener { discGroup.rotation = it.animatedValue as Float }
+            // 32s 转一圈极慢,30fps 已足够顺;把角度更新节流到 ~30fps,减少旋转硬件层的变换刷新(降 GPU)
+            var last = 0L
+            addUpdateListener {
+                val now = android.os.SystemClock.uptimeMillis()
+                if (now - last >= 33L) {
+                    last = now
+                    discGroup.rotation = it.animatedValue as Float
+                }
+            }
             start()
         }
     }
@@ -1274,8 +1372,8 @@ class CarPlayerActivity : Activity() {
      */
     private fun circleize(src: Bitmap): Bitmap {
         val side = min(src.width, src.height)
-        // 足够高的超采样让圆边在高分屏/旋转时依旧细腻
-        val n = (side * 3).coerceIn(480, 1440)
+        // 超采样按缩小后的圆盘显示尺寸取 ~2x 即可（1024 上限省一半纹理内存/GPU 采样）
+        val n = (side * 2).coerceIn(360, 1024)
         val out = Bitmap.createBitmap(n, n, Bitmap.Config.ARGB_8888)
         val c = Canvas(out)
         val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
@@ -1285,12 +1383,23 @@ class CarPlayerActivity : Activity() {
         // 否则圆与画布四边相切处 AA 被裁掉→上下左右呈硬边/锯齿。
         val pad = 3f
         val r = n / 2f - pad
-        val s = (r * 2f) / side
+        // 方形封面自带浅色/白色印刷边：若圆按短边内切(直径=短边)，圆周正好压在方形四边中点上
+        // →上下左右漏出白边。让圆只采样原图中心约 89% 区域(把图放大 zoom 倍溢出圆外)，
+        // 将封面自带的亮/白边裁到可见圆之外。
+        val zoom = 1.12f
+        val s = (r * 2f) / side * zoom
         m.setScale(s, s)
         m.postTranslate((n - src.width * s) / 2f, (n - src.height * s) / 2f)
         shader.setLocalMatrix(m)
         paint.shader = shader
         c.drawCircle(n / 2f, n / 2f, r, paint)
+        // 边缘压一圈极细暗色描边：消除抗锯齿亮边、并把封面边界自然融进黑色黑胶，杜绝残余白边。
+        val rim = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            strokeWidth = n * 0.014f
+            color = 0x99000000.toInt()
+        }
+        c.drawCircle(n / 2f, n / 2f, r - rim.strokeWidth / 2f, rim)
         return out
     }
 
@@ -1337,6 +1446,4 @@ class CarPlayerActivity : Activity() {
         val s = total % 60
         return "%d:%02d".format(m, s)
     }
-
-    private val ACCENT = 0xFF3FB9F0.toInt()
 }

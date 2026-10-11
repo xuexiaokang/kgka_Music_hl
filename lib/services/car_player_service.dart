@@ -294,7 +294,14 @@ class CarPlayerService {
         }
         break;
       case 'setEffect':
-        final name = (call.arguments as Map?)?['name'] as String?;
+        final args = call.arguments as Map?;
+        if (args?['off'] == true) {
+          // 车机"音效"面板的"关闭"项：关掉均衡器，audioEffectsLabel 回落为"关闭"。
+          await p?.setEqualizerEnabled(false);
+          _pushMeta();
+          break;
+        }
+        final name = args?['name'] as String?;
         if (p != null && name != null) {
           final preset = PlayerController.equalizerPresets
               .firstWhere((e) => e.name == name, orElse: () => PlayerController.equalizerPresets.first);
