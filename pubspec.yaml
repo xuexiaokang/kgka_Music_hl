@@ -1,7 +1,7 @@
 name: kgka_music_hl
 description: "the best music application"
 publish_to: 'none'
-version: 3.1.0
+version: 2026.10.07+20261007
 
 environment:
   sdk: ^3.11.5
@@ -29,6 +29,13 @@ dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^6.0.0
+
+# 本地 vendored fork：把卡拉OK高亮的每帧 2 次 saveLayer(dstIn 离屏混合) 换成酷我式
+# clipPath + 重画不透明字（零离屏），保留 60fps 与观感，砍掉弱车机 GPU 的单帧高额开销，
+# 让并发运行的浮窗视频不再被饿死掉帧。详见 third_party/flutter_lyric/lib/render/lyric_painter.dart。
+dependency_overrides:
+  flutter_lyric:
+    path: third_party/flutter_lyric
 
 flutter:
   uses-material-design: true
