@@ -1377,7 +1377,8 @@ class LyricWord {
     return LyricWord(
       time: Duration(milliseconds: asInt(json['timeMs']) ?? 0),
       duration: Duration(milliseconds: asInt(json['durationMs']) ?? 0),
-      text: asString(json['text']) ?? '',
+      // Spaces may be timed KRC words; trimming them changes cached lyrics.
+      text: json['text']?.toString() ?? '',
     );
   }
 }
@@ -2079,17 +2080,34 @@ class NetEaseAlbum {
   }
 }
 
-/// 网易云 / QQ 音乐歌单分享链接解析结果（/playlist/external/parse）。
+class ExternalPlaylistTrack {
+  const ExternalPlaylistTrack({required this.title, this.artist = '', this.duration});
+
+  final String title;
+  final String artist;
+  final Duration? duration;
+  String get displayName => artist.isEmpty ? title : '$artist - $title';
+}
+
+/// 网易云 / QQ 音乐歌单分享链接解析结果。
 class ExternalPlaylistParseResult {
   const ExternalPlaylistParseResult({
     required this.sourcePlatform,
     required this.playlistName,
     required this.songNames,
+    this.tracks = const [],
+    this.totalSongCount,
   });
 
   final String sourcePlatform;
   final String playlistName;
   final List<String> songNames;
+  final List<ExternalPlaylistTrack> tracks;
+  final int? totalSongCount;
+
+  List<ExternalPlaylistTrack> get importTracks => tracks.isNotEmpty
+      ? tracks
+      : songNames.map((name) => ExternalPlaylistTrack(title: name)).toList();
 
   factory ExternalPlaylistParseResult.fromJson(Map<String, dynamic> json) {
     return ExternalPlaylistParseResult(
