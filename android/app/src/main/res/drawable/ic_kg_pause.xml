@@ -1,8 +1,7 @@
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="24dp" android:height="24dp"
     android:viewportWidth="24" android:viewportHeight="24">
-    <!-- Material pause（填充路径） -->
-    <path android:fillColor="#FFFFFFFF" android:strokeColor="#FFFFFFFF"
-        android:strokeWidth="1.5" android:strokeLineJoin="round" android:strokeLineCap="round"
-        android:pathData="M6,19h4L10,5L6,5v14zM14,5v14h4L18,5h-4z"/>
+    <!-- Material Icons pause (round) —— 与 Flutter Icons.pause_rounded 1:1，纯填充 -->
+    <path android:fillColor="#FFFFFFFF"
+        android:pathData="M8 19 c1.1 0 2 -0.9 2 -2 V7 c0 -1.1 -0.9 -2 -2 -2 s-2 0.9 -2 2 v10 c0 1.1 0.9 2 2 2 z M14 7 v10 c0 1.1 0.9 2 2 2 s2 -0.9 2 -2 V7 c0 -1.1 -0.9 -2 -2 -2 s-2 0.9 -2 2 z"/>
 </vector>
