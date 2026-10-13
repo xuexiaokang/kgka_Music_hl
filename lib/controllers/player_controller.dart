@@ -10,6 +10,7 @@ import 'package:flutter/scheduler.dart';
 import 'package:just_audio/just_audio.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../core/shuffle_cycle.dart';
 import '../models/music_models.dart';
 import '../services/audio_effects_service.dart';
 import '../services/cache_service.dart';
@@ -61,6 +62,7 @@ class PlayerController extends ChangeNotifier {
       'settings.bluetooth_lyrics_enabled';
   static const _keepScreenOnSettingKey = 'settings.keep_screen_on';
   static const _lyricBlurSettingKey = 'settings.lyric_blur_enabled';
+  static const _playerGameEnabledSettingKey = 'settings.player_game_enabled';
   static const _queueKey = 'playback.queue';
   static const _currentSongKey = 'playback.current_song';
   static const _currentPositionKey = 'playback.current_position';
@@ -217,7 +219,7 @@ class PlayerController extends ChangeNotifier {
   // 平滑位置的上一次取值：用于过滤位置流的小幅倒退（音频缓冲/时钟抖动），
   // 避免歌词高亮和卡拉OK进度出现回跳。seek/换歌的大跨度回退会重建基线。
   Duration _lastSmoothPosition = Duration.zero;
-  final _random = math.Random();
+  final _shuffleCycle = ShuffleCycle<String>();
   /// 高潮试听结束时间（播放到该时间自动暂停）。
   Duration? _climaxEndTime;
 
@@ -282,6 +284,7 @@ class PlayerController extends ChangeNotifier {
   bool addListeningTimeEnabled = true;
   bool keepScreenOnEnabled = false;
   bool lyricBlurEnabled = false;
+  bool playerGameEnabled = true;
   AudioQuality audioQuality = AudioQuality.standard;
 
   bool get isPersonalFmActive => _isPersonalFmActive;
@@ -402,6 +405,7 @@ class PlayerController extends ChangeNotifier {
   }
 
   PlaybackMode cyclePlaybackMode() {
+    _shuffleCycle.clear();
     playbackMode = switch (playbackMode) {
       PlaybackMode.playlistLoop => PlaybackMode.shuffle,
       PlaybackMode.shuffle => PlaybackMode.singleLoop,
@@ -447,12 +451,28 @@ class PlayerController extends ChangeNotifier {
     notifyListeners();
   }
 
+  Future<void> setPlayerGameEnabled(bool enabled) async {
+    if (playerGameEnabled == enabled) {
+      return;
+    }
+    playerGameEnabled = enabled;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_playerGameEnabledSettingKey, enabled);
+    notifyListeners();
+  }
+
   Future<void> playSong(
     Song song, {
     List<Song>? queue,
     bool preservePersonalFmSession = false,
   }) async {
-    if (!preservePersonalFmSession) {
+    final isPlayingWithinCurrentQueue = _isPersonalFmActive &&
+        (queue == null ||
+            identical(queue, this.queue) ||
+            _isSameQueue(queue, this.queue));
+    final shouldPreserveFm =
+        preservePersonalFmSession || isPlayingWithinCurrentQueue;
+    if (!shouldPreserveFm) {
       _isPersonalFmActive = false;
       _isLoadingPersonalFm = false;
       _personalFmRequestSerial++;
@@ -465,11 +485,22 @@ class PlayerController extends ChangeNotifier {
     isPreparing = true;
     _isChangingSource = true;
     errorMessage = null;
+    final replacesQueue =
+        queue != null && queue.isNotEmpty && !identical(queue, this.queue);
     currentSong = song;
     if (queue != null && queue.isNotEmpty) {
       this.queue = queue;
     } else if (this.queue.isEmpty) {
       this.queue = [song];
+    }
+    final songIdentity = _songIdentity(song);
+    if (replacesQueue) {
+      _shuffleCycle.reset(
+        this.queue.map(_songIdentity).where((identity) => identity.isNotEmpty),
+        current: songIdentity,
+      );
+    } else if (songIdentity.isNotEmpty) {
+      _shuffleCycle.markPlayed(songIdentity);
     }
     lyrics = const [];
     _lastDesktopLyricIndex = -1;
@@ -2032,6 +2063,8 @@ class PlayerController extends ChangeNotifier {
         prefs.getBool(_keepScreenOnSettingKey) ?? keepScreenOnEnabled;
     lyricBlurEnabled =
         prefs.getBool(_lyricBlurSettingKey) ?? lyricBlurEnabled;
+    playerGameEnabled =
+        prefs.getBool(_playerGameEnabledSettingKey) ?? playerGameEnabled;
     audioQuality = AudioQuality.fromApiValue(
       prefs.getString(_audioQualitySettingKey),
     );
@@ -2267,15 +2300,18 @@ class PlayerController extends ChangeNotifier {
       return null;
     }
     if (playbackMode == PlaybackMode.shuffle) {
-      if (queue.length == 1) return queue.first;
-
-      var nextIndex = _random.nextInt(queue.length);
-      if (index >= 0) {
-        while (nextIndex == index) {
-          nextIndex = _random.nextInt(queue.length);
-        }
-      }
-      return queue[nextIndex];
+      final currentIdentity = currentSong == null
+          ? null
+          : _songIdentity(currentSong!);
+      final nextIdentity = _shuffleCycle.next(
+        queue.map(_songIdentity).where((identity) => identity.isNotEmpty),
+        current: currentIdentity,
+      );
+      if (nextIdentity == null) return currentSong;
+      return queue.firstWhere(
+        (song) => _songIdentity(song) == nextIdentity,
+        orElse: () => currentSong ?? queue.first,
+      );
     }
 
     if (index >= 0 && index < queue.length - 1) {
@@ -2359,6 +2395,15 @@ class PlayerController extends ChangeNotifier {
       return 'audio:${song.albumAudioId}';
     }
     return song.id.isEmpty ? '' : 'id:${song.id}';
+  }
+
+  bool _isSameQueue(List<Song> a, List<Song> b) {
+    if (identical(a, b)) return true;
+    if (a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (_songIdentity(a[i]) != _songIdentity(b[i])) return false;
+    }
+    return true;
   }
 
   List<Song> _personalFmAdditions(List<Song> incoming, Song current) {

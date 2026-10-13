@@ -156,7 +156,12 @@ class _PlayerPageState extends State<PlayerPage> {
                   ),
                   onTap: () {
                     Navigator.of(context).pop();
-                    widget.player.playSong(song, queue: widget.player.queue);
+                    widget.player.playSong(
+                      song,
+                      queue: widget.player.queue,
+                      preservePersonalFmSession:
+                          widget.player.isPersonalFmActive,
+                    );
                   },
                 );
               },
@@ -600,8 +605,20 @@ class _ArtworkBackgroundState extends State<_ArtworkBackground> {
           children: [
             // 始终显示渐变兜底背景，避免封面加载期间出现纯黑背景
             const _FallbackBackground(),
-            if (_blurredCover != null)
+            // 液态玻璃开启：用预计算的静态模糊纹理（酷我纪律①，避免每帧重算全屏模糊/旋转）
+            if (ThemeController.instance.liquidGlassEnabled && _blurredCover != null)
               RawImage(image: _blurredCover, fit: BoxFit.cover),
+            // 液态玻璃关闭：显示不模糊的封面背景
+            if (!ThemeController.instance.liquidGlassEnabled &&
+                widget.song.coverUrl != null)
+              Image.network(
+                widget.song.coverUrl!,
+                fit: BoxFit.cover,
+                cacheWidth: 360,
+                cacheHeight: 360,
+                errorBuilder: (context, error, stackTrace) =>
+                    const SizedBox.shrink(),
+              ),
             DecoratedBox(
               decoration: BoxDecoration(
                 gradient: LinearGradient(
@@ -2872,27 +2889,29 @@ class _CommentEntry extends StatelessWidget {
           if (song.source == SongSource.kugou) const SizedBox(width: 4),
 
           // 音乐游戏按钮（在评论按钮右侧）
-          Material(
-            color: Colors.transparent,
-            child: InkWell(
-              borderRadius: BorderRadius.circular(AppRadius.sm),
-              onTap: () {
-                Navigator.of(context).push(
-                  MaterialPageRoute<void>(
-                    builder: (_) => RhythmGamePage(player: player),
+          if (player.playerGameEnabled) ...[
+            Material(
+              color: Colors.transparent,
+              child: InkWell(
+                borderRadius: BorderRadius.circular(AppRadius.sm),
+                onTap: () {
+                  Navigator.of(context).push(
+                    MaterialPageRoute<void>(
+                      builder: (_) => RhythmGamePage(player: player),
+                    ),
+                  );
+                },
+                child: const Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                  child: Icon(
+                    Icons.sports_esports_outlined,
+                    size: 22,
+                    color: Colors.white54,
                   ),
-                );
-              },
-              child: const Padding(
-                padding: EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-                child: Icon(
-                  Icons.sports_esports_outlined,
-                  size: 22,
-                  color: Colors.white54,
                 ),
               ),
             ),
-          ),
+          ],
         ],
       ),
       ),
