@@ -146,6 +146,12 @@ class PlayerController extends ChangeNotifier {
       }
       _syncListeningTimeTracker();
       _syncDesktopPlayState();
+      _updateStallWatchdog();
+      // 播放确认恢复健康（在播且不再缓冲）→ 清零自动恢复计数，给下一段
+      // 卡顿重新计数的机会。
+      if (isPlaying && !isBuffering && _recoveryAttempts != 0) {
+        _recoveryAttempts = 0;
+      }
       notifyListeners();
     });
     _processingStateSub = audioPlayer.processingStateStream.distinct().listen((
@@ -165,6 +171,13 @@ class PlayerController extends ChangeNotifier {
       unawaited(_applyEqualizer());
       unawaited(_applyBassBoost());
       unawaited(_applyVolumeNormalization());
+    });
+    _playerErrorSub = audioPlayer.errorStream.listen((err) {
+      // 播放期错误（多为网络中断 / 流地址过期）→ 走自动恢复，而非直接卡停。
+      debugPrint(
+        '[KA Music][player] errorStream: code=${err.code} ${err.message}',
+      );
+      unawaited(_scheduleRecovery(reason: 'player-error'));
     });
     unawaited(_setupAudioSessionListeners());
   }
@@ -211,6 +224,19 @@ class PlayerController extends ChangeNotifier {
   /// 当前歌曲的高潮片段时间（用于进度条标记），可能为 null。
   SongClimax? climax;
   Timer? _completionFallbackTimer;
+
+  // —— 网络不稳定 / 播放停滞 运行时兜底 ——
+  /// 缓冲看门狗超时：进入 loading/buffering 后若在该时长内仍未恢复播放，
+  /// 触发自动「重取播放地址 →（仅智能音质开启时）降音质 → 续播」，多次仍
+  /// 失败则跳到下一首，避免弱网/URL 过期把播放永久卡死。
+  static const _stallWatchdogTimeout = Duration(seconds: 20);
+  /// 单首歌曲「卡住/报错 → 自动恢复」的最大尝试次数，超过则跳下一首。
+  static const _maxRecoveryAttempts = 2;
+  Timer? _stallWatchdogTimer;
+  StreamSubscription<PlayerException>? _playerErrorSub;
+  bool _recovering = false;
+  int _recoveryAttempts = 0;
+
   Timer? _listenTimeTimer;
   Timer? _queueSaveTimer;
   Timer? _positionSaveTimer;
@@ -424,6 +450,7 @@ class PlayerController extends ChangeNotifier {
     _climaxEndTime = null;
     climax = null;
     _completionFallbackTimer?.cancel();
+    _resetRecovery();
     _completedSongHash = null;
     isPreparing = true;
     _isChangingSource = true;
@@ -626,6 +653,125 @@ class PlayerController extends ChangeNotifier {
       case AudioQuality.standard:
         return null;
     }
+  }
+
+  // ================= 网络不稳定 / 播放停滞 自动恢复 =================
+
+  /// 根据当前缓冲状态挂起/撤销「卡顿看门狗」。
+  ///
+  /// 仅当【有当前歌曲】且【正处于 loading/buffering】且【不在恢复过程中】时
+  /// 才计时；一旦超过 [_stallWatchdogTimeout] 仍未恢复播放，就触发
+  /// [_scheduleRecovery]。正常切歌/主动暂停/已 ready 都会撤销计时。
+  void _updateStallWatchdog() {
+    final shouldWatch =
+        isBuffering && currentSong != null && !_recovering;
+    if (shouldWatch) {
+      if (_stallWatchdogTimer?.isActive != true) {
+        _stallWatchdogTimer = Timer(_stallWatchdogTimeout, () {
+          unawaited(_scheduleRecovery(reason: 'buffering-timeout'));
+        });
+      }
+    } else {
+      _stallWatchdogTimer?.cancel();
+    }
+  }
+
+  /// 播放卡住 / 报错时的自动恢复：重取播放地址并在原进度续播；连续失败达
+  /// 上限则跳到下一首，避免坏源把播放永久卡死。
+  ///
+  /// 注意：音质降级只在「智能音质」开启时发生——恢复内部复用
+  /// [_resolvePlayUrl]，而后者仅在 [smartQualityEnabled] 为 true 时才降档，
+  /// 关闭时只会以当前音质重取地址。
+  Future<void> _scheduleRecovery({required String reason}) async {
+    if (_recovering) return;
+    final song = currentSong;
+    if (song == null) return;
+
+    if (_recoveryAttempts >= _maxRecoveryAttempts) {
+      debugPrint('[KA Music][recover] 恢复达上限，自动跳到下一首（原因=$reason）');
+      _resetRecovery();
+      unawaited(next());
+      return;
+    }
+
+    _recovering = true;
+    _stallWatchdogTimer?.cancel();
+    _recoveryAttempts++;
+    final resumePos = smoothPosition;
+    debugPrint(
+      '[KA Music][recover] 第 $_recoveryAttempts/$_maxRecoveryAttempts 次恢复，'
+      '原因=$reason，smartQuality=$smartQualityEnabled',
+    );
+    try {
+      await _recoverReload(song, resumePos);
+    } catch (error) {
+      debugPrint('[KA Music][recover] 本次恢复失败: $error');
+      errorMessage = error.toString();
+      notifyListeners();
+      // 重加载抛错（如取地址失败）后播放器可能不再处于 buffering，看门狗
+      // 不会自动再触发；这里显式再排一次，直到达上限后跳歌，保证能前进。
+      if (_recoveryAttempts < _maxRecoveryAttempts) {
+        Timer(const Duration(seconds: 2), () {
+          unawaited(_scheduleRecovery(reason: '$reason/retry'));
+        });
+      } else {
+        _resetRecovery();
+        unawaited(next());
+      }
+    } finally {
+      _recovering = false;
+    }
+  }
+
+  /// 以当前进度重新加载正在播放的歌曲（重取地址，处理 URL 过期 / 网络中断）。
+  Future<void> _recoverReload(Song song, Duration resumePos) async {
+    _isChangingSource = true; // 抑制恢复过程中的 completed 误判
+    isPreparing = true;
+    errorMessage = null;
+    notifyListeners();
+    try {
+      String url;
+      String? networkUrl;
+      final local = downloadController?.localPathFor(song, audioQuality);
+      if (local != null) {
+        url = local;
+      } else if (song.source == SongSource.local) {
+        url = song.id;
+      } else {
+        final playUrl = await _resolvePlayUrl(song);
+        if (playUrl.url.isEmpty) {
+          throw Exception('这首歌暂时没有可播放地址');
+        }
+        url = playUrl.url;
+        networkUrl = playUrl.url;
+      }
+      await _audioHandler.loadSong(
+        song: song,
+        url: url,
+        queueSongs: queue,
+        queueIndex: currentIndex,
+      );
+      if (resumePos > Duration.zero) {
+        await _audioHandler.seek(_clampPosition(resumePos));
+      }
+      await _audioHandler.play();
+      if (networkUrl != null) {
+        unawaited(
+          downloadController?.cacheForPlayback(song, audioQuality, networkUrl),
+        );
+      }
+    } finally {
+      isPreparing = false;
+      _isChangingSource = false;
+      notifyListeners();
+    }
+  }
+
+  /// 复位卡顿恢复状态（换歌 / 跳歌 / 恢复成功确认健康后调用）。
+  void _resetRecovery() {
+    _stallWatchdogTimer?.cancel();
+    _stallWatchdogTimer = null;
+    _recoveryAttempts = 0;
   }
 
   Future<bool> addToQueue(Song song) async {
@@ -2178,6 +2324,8 @@ class PlayerController extends ChangeNotifier {
     _becomingNoisySub?.cancel();
     _devicesSub?.cancel();
     _completionFallbackTimer?.cancel();
+    _stallWatchdogTimer?.cancel();
+    _playerErrorSub?.cancel();
     unawaited(
       _audioEffects.configureEqualizer(
         audioSessionId:
