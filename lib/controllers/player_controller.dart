@@ -238,6 +238,15 @@ class PlayerController extends ChangeNotifier {
   bool _recovering = false;
   int _recoveryAttempts = 0;
 
+  /// 网络中断等待恢复态：为 true 时不跳歌，按 [_networkPollInterval] 轮询，
+  /// 网络恢复后自动续播中断前那一首的 [_savedResumePos] 进度。
+  bool _waitingForNetwork = false;
+  Duration? _savedResumePos;
+  static const _networkPollInterval = Duration(seconds: 5);
+
+  /// UI 可读：当前是否处于「网络中断，等待恢复」状态。
+  bool get isWaitingForNetwork => _waitingForNetwork;
+
   Timer? _listenTimeTimer;
   Timer? _queueSaveTimer;
   Timer? _positionSaveTimer;
@@ -665,7 +674,7 @@ class PlayerController extends ChangeNotifier {
   /// [_scheduleRecovery]。正常切歌/主动暂停/已 ready 都会撤销计时。
   void _updateStallWatchdog() {
     final shouldWatch =
-        isBuffering && currentSong != null && !_recovering;
+        isBuffering && currentSong != null && !_recovering && !_waitingForNetwork;
     if (shouldWatch) {
       if (_stallWatchdogTimer?.isActive != true) {
         _stallWatchdogTimer = Timer(_stallWatchdogTimeout, () {
@@ -677,52 +686,101 @@ class PlayerController extends ChangeNotifier {
     }
   }
 
-  /// 播放卡住 / 报错时的自动恢复：重取播放地址并在原进度续播；连续失败达
-  /// 上限则跳到下一首，避免坏源把播放永久卡死。
+  /// 播放卡住 / 报错时的自动恢复。
+  ///
+  /// 关键区分：
+  /// - **网络中断**（重取播放地址时抛连接类异常）→ 进入「等待网络恢复」态，
+  ///   不跳歌、不消耗跳歌预算，按 [_networkPollInterval] 轮询，网络回来后自动
+  ///   续播中断前那一首的原进度。
+  /// - **音源本身不可用**（网络正常但该曲取不到地址 / 反复卡顿）→ 计数重试，
+  ///   达上限则跳到下一首。
   ///
   /// 注意：音质降级只在「智能音质」开启时发生——恢复内部复用
-  /// [_resolvePlayUrl]，而后者仅在 [smartQualityEnabled] 为 true 时才降档，
-  /// 关闭时只会以当前音质重取地址。
+  /// [_resolvePlayUrl]，而后者仅在 [smartQualityEnabled] 为 true 时才降档。
   Future<void> _scheduleRecovery({required String reason}) async {
     if (_recovering) return;
     final song = currentSong;
     if (song == null) return;
 
-    if (_recoveryAttempts >= _maxRecoveryAttempts) {
-      debugPrint('[KA Music][recover] 恢复达上限，自动跳到下一首（原因=$reason）');
-      _resetRecovery();
-      unawaited(next());
-      return;
+    final wasWaiting = _waitingForNetwork;
+    // 等待网络恢复期间沿用中断前的进度；正常卡顿用当前进度。
+    final resumePos = wasWaiting ? (_savedResumePos ?? smoothPosition) : smoothPosition;
+
+    // 网络轮询不计入跳歌预算；真实卡顿/报错才计数并在超上限时跳歌。
+    if (!wasWaiting) {
+      _recoveryAttempts++;
+      if (_recoveryAttempts > _maxRecoveryAttempts) {
+        debugPrint('[KA Music][recover] 恢复尝试超上限，跳到下一首');
+        _resetRecovery();
+        unawaited(next());
+        return;
+      }
     }
 
     _recovering = true;
     _stallWatchdogTimer?.cancel();
-    _recoveryAttempts++;
-    final resumePos = smoothPosition;
     debugPrint(
-      '[KA Music][recover] 第 $_recoveryAttempts/$_maxRecoveryAttempts 次恢复，'
-      '原因=$reason，smartQuality=$smartQualityEnabled',
+      '[KA Music][recover] 尝试恢复 原因=$reason 计数=$_recoveryAttempts '
+      '等待网络=$_waitingForNetwork smart=$smartQualityEnabled',
     );
     try {
       await _recoverReload(song, resumePos);
+      if (wasWaiting) {
+        // 网络恢复，成功续播同一首。
+        _waitingForNetwork = false;
+        _savedResumePos = null;
+        errorMessage = null;
+        notifyListeners();
+      }
+      // 成功重加载后不立即清零计数：等 _stateSub 确认「在播且不缓冲」再清零，
+      // 避免「能取地址但流媒体反复卡顿」时无限循环不跳歌。
     } catch (error) {
-      debugPrint('[KA Music][recover] 本次恢复失败: $error');
-      errorMessage = error.toString();
-      notifyListeners();
-      // 重加载抛错（如取地址失败）后播放器可能不再处于 buffering，看门狗
-      // 不会自动再触发；这里显式再排一次，直到达上限后跳歌，保证能前进。
-      if (_recoveryAttempts < _maxRecoveryAttempts) {
+      if (_isNetworkError(error)) {
+        _enterWaitingForNetwork(resumePos);
+      } else {
+        // 非网络错误：安排下一次尝试；若已超上限，下次进入时顶部守卫会跳歌。
         _recoveryRetryTimer?.cancel();
         _recoveryRetryTimer = Timer(const Duration(seconds: 2), () {
           unawaited(_scheduleRecovery(reason: '$reason/retry'));
         });
-      } else {
-        _resetRecovery();
-        unawaited(next());
       }
     } finally {
       _recovering = false;
     }
+  }
+
+  /// 进入「等待网络恢复」态：记录中断前进度、清零跳歌计数、按固定间隔轮询。
+  void _enterWaitingForNetwork(Duration resumePos) {
+    _waitingForNetwork = true;
+    _savedResumePos = resumePos;
+    _recoveryAttempts = 0; // 网络等待不占用跳歌预算
+    errorMessage = '网络已中断，等待恢复后将自动继续播放';
+    notifyListeners();
+    debugPrint('[KA Music][recover] 检测到网络中断，进入等待网络恢复状态');
+    _recoveryRetryTimer?.cancel();
+    _recoveryRetryTimer = Timer(_networkPollInterval, () {
+      unawaited(_scheduleRecovery(reason: 'network-poll'));
+    });
+  }
+
+  /// 判定一次异常是否为「网络不可用」类（连接失败 / DNS 解析失败 / 超时）。
+  ///
+  /// 恢复流程第一步总会重新请求 API 取播放地址，因此网络断时会先在这里抛出，
+  /// 是可靠的断网信号（本地缓存 / 网易外链等不走 API 的源除外）。
+  bool _isNetworkError(Object e) {
+    if (e is TimeoutException) return true;
+    if (e is SocketException) return true;
+    if (e is HandshakeException) return true;
+    final s = e.toString();
+    return s.contains('ClientException') ||
+        s.contains('SocketException') ||
+        s.contains('Failed host lookup') ||
+        s.contains('Unable to resolve host') ||
+        s.contains('ENETUNREACH') ||
+        s.contains('EHOSTUNREACH') ||
+        s.contains('Network is unreachable') ||
+        s.contains('connection to server') ||
+        s.contains('请求超时');
   }
 
   /// 以当前进度重新加载正在播放的歌曲（重取地址，处理 URL 过期 / 网络中断）。
@@ -776,6 +834,8 @@ class PlayerController extends ChangeNotifier {
     _recoveryRetryTimer?.cancel();
     _recoveryRetryTimer = null;
     _recoveryAttempts = 0;
+    _waitingForNetwork = false;
+    _savedResumePos = null;
   }
 
   Future<bool> addToQueue(Song song) async {
