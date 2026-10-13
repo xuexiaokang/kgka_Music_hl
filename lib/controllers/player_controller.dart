@@ -233,6 +233,7 @@ class PlayerController extends ChangeNotifier {
   /// 单首歌曲「卡住/报错 → 自动恢复」的最大尝试次数，超过则跳下一首。
   static const _maxRecoveryAttempts = 2;
   Timer? _stallWatchdogTimer;
+  Timer? _recoveryRetryTimer;
   StreamSubscription<PlayerException>? _playerErrorSub;
   bool _recovering = false;
   int _recoveryAttempts = 0;
@@ -711,7 +712,8 @@ class PlayerController extends ChangeNotifier {
       // 重加载抛错（如取地址失败）后播放器可能不再处于 buffering，看门狗
       // 不会自动再触发；这里显式再排一次，直到达上限后跳歌，保证能前进。
       if (_recoveryAttempts < _maxRecoveryAttempts) {
-        Timer(const Duration(seconds: 2), () {
+        _recoveryRetryTimer?.cancel();
+        _recoveryRetryTimer = Timer(const Duration(seconds: 2), () {
           unawaited(_scheduleRecovery(reason: '$reason/retry'));
         });
       } else {
@@ -771,6 +773,8 @@ class PlayerController extends ChangeNotifier {
   void _resetRecovery() {
     _stallWatchdogTimer?.cancel();
     _stallWatchdogTimer = null;
+    _recoveryRetryTimer?.cancel();
+    _recoveryRetryTimer = null;
     _recoveryAttempts = 0;
   }
 
@@ -2325,6 +2329,7 @@ class PlayerController extends ChangeNotifier {
     _devicesSub?.cancel();
     _completionFallbackTimer?.cancel();
     _stallWatchdogTimer?.cancel();
+    _recoveryRetryTimer?.cancel();
     _playerErrorSub?.cancel();
     unawaited(
       _audioEffects.configureEqualizer(
