@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:http/http.dart' as http;
@@ -15,9 +16,16 @@ class ApiException implements Exception {
 }
 
 class ApiClient {
-  ApiClient({http.Client? client}) : _client = client ?? http.Client();
+  ApiClient({http.Client? client, Duration? requestTimeout})
+      : _client = client ?? http.Client(),
+        requestTimeout = requestTimeout ?? const Duration(seconds: 15);
 
   final http.Client _client;
+
+  /// 单次请求的应用级超时上限。弱网下 `http.Client` 会一直挂到 OS 级 TCP
+  /// 超时（可能几十秒）才抛异常，期间界面卡「加载中」。这里给每次请求套一个
+  /// 硬上限，超时即抛 [TimeoutException] 并纳入下面的自动重试。
+  final Duration requestTimeout;
   String? token;
   String? t1;
   String? sessionId;
@@ -72,15 +80,15 @@ class ApiClient {
 
   /// 带自动重试的请求发送。
   ///
-  /// 对连接超时、5xx 服务器错误自动重试，指数退避（500ms、1s）。
-  /// 其他错误（如 4xx、格式异常）不重试，直接抛出。
+  /// 对连接超时、应用级超时（[requestTimeout]）、5xx 服务器错误自动重试，
+  /// 指数退避（500ms、1s）。其他错误（如 4xx、格式异常）不重试，直接抛出。
   Future<dynamic> _sendWithRetry(
     Future<http.Response> Function() request, {
     int maxRetries = 2,
   }) async {
     for (var attempt = 0; attempt <= maxRetries; attempt++) {
       try {
-        final response = await request();
+        final response = await request().timeout(requestTimeout);
         // 5xx 服务器错误可重试
         if (response.statusCode >= 500 && attempt < maxRetries) {
           await Future.delayed(Duration(milliseconds: 500 * (1 << attempt)));
@@ -94,6 +102,14 @@ class ApiClient {
           continue;
         }
         rethrow;
+      } on TimeoutException {
+        // 应用级超时（弱网下请求迟迟不返回），重试；退避后仍超时则抛出，
+        // 让上层（如播放地址解析/音质降级）接管。
+        if (attempt < maxRetries) {
+          await Future.delayed(Duration(milliseconds: 500 * (1 << attempt)));
+          continue;
+        }
+        throw ApiException('请求超时，已重试 $maxRetries 次');
       } on FormatException {
         // 非 5xx 的格式异常不重试
         rethrow;

@@ -1,7 +1,7 @@
 name: kgka_music_hl
 description: "the best music application"
 publish_to: 'none'
-version: 2026.10.10+20261
+version: 2026.10.14+20262
 
 environment:
   sdk: ^3.11.5
@@ -11,6 +11,8 @@ dependencies:
     sdk: flutter
   audio_service: ^0.18.18
   audio_session: ^0.2.4
+  audio_metadata_reader: ^1.8.0
+  charset: ^2.0.1
   http: ^1.5.0
   just_audio: ^0.10.4
   just_audio_windows: ^0.2.3
