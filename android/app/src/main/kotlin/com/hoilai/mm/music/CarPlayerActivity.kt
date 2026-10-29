@@ -543,23 +543,36 @@ class CarPlayerActivity : Activity() {
         }
         c.drawCircle(cx, cy, r, base)
 
-        // 同心沟槽:加强对比让纹路清晰可见(0.65R~0.99R,约34道)
+        // 同心沟槽:模拟真实唱片——较疏的细纹 + 几道轨道分隔的光滑间隙(间隙处稍反光)
         val groove = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             style = Paint.Style.STROKE
-            strokeWidth = (size * 0.0032f).coerceAtLeast(1f)
+            strokeWidth = (size * 0.0026f).coerceAtLeast(1f)
         }
-        val inner = r * 0.65f
-        val outer = r * 0.99f
-        val rings = 34
+        val inner = r * 0.665f
+        val outer = r * 0.965f
+        val rings = 20
         val step = (outer - inner) / rings
+        // 轨道分隔间隙所在的半径比例(真实唱片按曲目分段)
+        val gaps = floatArrayOf(0.74f, 0.81f, 0.88f)
         var rr = inner
         var i = 0
-        while (i < rings) {
-            groove.color = if (i % 2 == 0) 0x2EFFFFFF else 0x66000000
-            c.drawCircle(cx, cy, rr, groove)
+        while (i <= rings) {
+            val rf = rr / r
+            val inGap = gaps.any { kotlin.math.abs(rf - it) < 0.02f }
+            if (!inGap) {
+                groove.color = if (i % 2 == 0) 0x14FFFFFF else 0x30000000
+                c.drawCircle(cx, cy, rr, groove)
+            }
             rr += step
             i++
         }
+        // 间隙处的反光边界细线(槽间受光)
+        val sep = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            strokeWidth = (size * 0.0018f).coerceAtLeast(1f)
+            color = 0x26FFFFFF
+        }
+        gaps.forEach { rf -> c.drawCircle(cx, cy, r * rf, sep) }
 
         // 标签孔外的细暗环:把中心封面与黑胶盘体分出一圈边界
         val labelDark = Paint(Paint.ANTI_ALIAS_FLAG).apply {
