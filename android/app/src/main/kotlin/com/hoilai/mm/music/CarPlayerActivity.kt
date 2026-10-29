@@ -65,6 +65,10 @@ class CarPlayerActivity : Activity() {
     private lateinit var moreBtn: ImageButton
     private lateinit var queueOverlay: FrameLayout
     private lateinit var queueList: LinearLayout
+    // 队列面板懒重建:切歌时只缓存最新队列数据,打开面板时才真正构建,
+    // 避免每次 onMeta 都在 UI 线程 removeAllViews + 逐行 inflate + 逐行起下载线程导致切歌卡顿。
+    private var pendingQueueItems: List<Map<*, *>>? = null
+    private var queueDirty = false
     private lateinit var queueCountText: TextView
     private lateinit var queueClearBtn: TextView
     private lateinit var queueTitleText: TextView
@@ -463,17 +467,40 @@ class CarPlayerActivity : Activity() {
 
         discWrap.addView(discGroup, FrameLayout.LayoutParams(sizePx, sizePx, Gravity.CENTER))
 
-        // 静态柔光：极淡的左上环境光(主高光在盘体外缘,已烘焙进位图),不随盘旋转。
-        val gloss = View(this).apply {
+        // 静态光泽层(不随盘旋转,模拟固定光源下的胶片反光):
+        // ① 左上环境柔光 ② 一道斜向镜面高光带(中间亮、两端渐隐)
+        val glossAmbient = View(this).apply {
             background = GradientDrawable().apply {
                 shape = GradientDrawable.OVAL
                 gradientType = GradientDrawable.RADIAL_GRADIENT
                 setGradientCenter(0.34f, 0.28f)
-                gradientRadius = sizePx * 0.75f
-                setColors(intArrayOf(0x16FFFFFF, 0x06FFFFFF, 0x00FFFFFF))
+                gradientRadius = sizePx * 0.8f
+                setColors(intArrayOf(0x24FFFFFF, 0x0AFFFFFF, 0x00FFFFFF))
             }
         }
-        discWrap.addView(gloss, FrameLayout.LayoutParams(sizePx, sizePx, Gravity.CENTER))
+        discWrap.addView(glossAmbient, FrameLayout.LayoutParams(sizePx, sizePx, Gravity.CENTER))
+
+        val glossSheen = View(this).apply {
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.RECTANGLE
+                gradientType = GradientDrawable.LINEAR_GRADIENT // 默认水平(左→右)
+                setColors(
+                    intArrayOf(
+                        0x00FFFFFF, 0x00FFFFFF, 0x22FFFFFF, 0x4DFFFFFF,
+                        0x22FFFFFF, 0x00FFFFFF, 0x00FFFFFF
+                    ),
+                    floatArrayOf(0f, 0.30f, 0.44f, 0.52f, 0.60f, 0.74f, 1f)
+                )
+            }
+            rotation = 45f // 整层斜置得到斜向高光带(圆形裁剪旋转后仍是正圆)
+            outlineProvider = object : ViewOutlineProvider() {
+                override fun getOutline(view: View, outline: android.graphics.Outline) {
+                    outline.setOval(0, 0, view.width, view.height)
+                }
+            }
+            clipToOutline = true
+        }
+        discWrap.addView(glossSheen, FrameLayout.LayoutParams(sizePx, sizePx, Gravity.CENTER))
 
         // 左右滑动切歌（对齐 Flutter _LandscapeArtworkShowcase.onHorizontalDragEnd）
         val discGesture = android.view.GestureDetector(this,
@@ -516,19 +543,19 @@ class CarPlayerActivity : Activity() {
         }
         c.drawCircle(cx, cy, r, base)
 
-        // 细密同心沟槽:封面外(0.65R)到盘边(0.99R),约40道,极淡(网易云沟槽很细很淡)
+        // 同心沟槽:加强对比让纹路清晰可见(0.65R~0.99R,约34道)
         val groove = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             style = Paint.Style.STROKE
-            strokeWidth = (size * 0.0022f).coerceAtLeast(1f)
+            strokeWidth = (size * 0.0032f).coerceAtLeast(1f)
         }
         val inner = r * 0.65f
         val outer = r * 0.99f
-        val rings = 40
+        val rings = 34
         val step = (outer - inner) / rings
         var rr = inner
         var i = 0
         while (i < rings) {
-            groove.color = if (i % 2 == 0) 0x0DFFFFFF else 0x1F000000
+            groove.color = if (i % 2 == 0) 0x2EFFFFFF else 0x66000000
             c.drawCircle(cx, cy, rr, groove)
             rr += step
             i++
@@ -760,6 +787,11 @@ class CarPlayerActivity : Activity() {
     }
 
     private fun showQueue() {
+        // 打开面板时才构建队列(切歌期间只缓存了数据),把重建开销挪出切歌关键路径
+        if (queueDirty) {
+            pendingQueueItems?.let { rebuildQueue(it) }
+            queueDirty = false
+        }
         // 主题快照在 buildUi 之后才到，显示前按当前 th* 重刷静态装饰色
         queuePanelBg.setColor(thSurface)
         queueHandleBg.setColor(thOutlineVariant)
@@ -1199,7 +1231,14 @@ class CarPlayerActivity : Activity() {
         sleepFinishCurrent = (m["sleepFinishCurrent"] as? Boolean) ?: sleepFinishCurrent
         sleepRemainingMs = (m["sleepRemainingMs"] as? Number)?.toLong()
         @Suppress("UNCHECKED_CAST")
-        (m["queue"] as? List<Map<*, *>>)?.let { rebuildQueue(it) }
+        (m["queue"] as? List<Map<*, *>>)?.let { q ->
+            pendingQueueItems = q
+            queueDirty = true
+            // 面板正显示时才即时刷新;否则留到 showQueue() 打开时再构建,避免切歌卡顿
+            if (::queueOverlay.isInitialized && queueOverlay.visibility == View.VISIBLE) {
+                rebuildQueue(q)
+            }
+        }
     }
 
     fun onLyrics(m: Map<*, *>?) {

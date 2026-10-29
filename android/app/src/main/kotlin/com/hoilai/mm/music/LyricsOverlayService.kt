@@ -231,6 +231,7 @@ class LyricsOverlayService : Service() {
         var initialTouchX = 0f
         var initialTouchY = 0f
         var isDragging = false
+        var downTime = 0L
 
         view.setOnTouchListener { _, event ->
             if (isPassthrough) return@setOnTouchListener false
@@ -241,6 +242,7 @@ class LyricsOverlayService : Service() {
                     initialTouchX = event.rawX
                     initialTouchY = event.rawY
                     isDragging = false
+                    downTime = SystemClock.uptimeMillis()
                     true
                 }
                 MotionEvent.ACTION_MOVE -> {
@@ -266,11 +268,40 @@ class LyricsOverlayService : Service() {
                             .putInt(KEY_POS_X, lp.x)
                             .putInt(KEY_POS_Y, lp.y)
                             .apply()
+                        true
+                    } else if (!isLocked) {
+                        val duration = SystemClock.uptimeMillis() - downTime
+                        val dx = abs(event.rawX - initialTouchX)
+                        val dy = abs(event.rawY - initialTouchY)
+                        if (duration < 400 && dx < 20 && dy < 20) {
+                            openApp()
+                            true
+                        } else {
+                            false
+                        }
+                    } else {
+                        false
                     }
-                    isDragging
                 }
                 else -> false
             }
+        }
+    }
+
+    private fun openApp() {
+        try {
+            val launchIntent = packageManager.getLaunchIntentForPackage(packageName)?.apply {
+                addFlags(
+                    Intent.FLAG_ACTIVITY_NEW_TASK or
+                    Intent.FLAG_ACTIVITY_SINGLE_TOP or
+                    Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED
+                )
+            }
+            if (launchIntent != null) {
+                startActivity(launchIntent)
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
         }
     }
 
@@ -472,7 +503,13 @@ class LyricsOverlayService : Service() {
     }
 
     private fun buildNotification(): Notification {
-        val intent = packageManager.getLaunchIntentForPackage(packageName)
+        val intent = packageManager.getLaunchIntentForPackage(packageName)?.apply {
+            addFlags(
+                Intent.FLAG_ACTIVITY_NEW_TASK or
+                Intent.FLAG_ACTIVITY_SINGLE_TOP or
+                Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED
+            )
+        }
         val pendingIntent = PendingIntent.getActivity(
             this, 0, intent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE

@@ -281,6 +281,10 @@ class PlayerController extends ChangeNotifier {
   String? _completedSongHash;
   bool _isAppForeground = true;
   bool _desktopLyricsPreviewVisible = false;
+  /// 用户是否在本次后台运行中主动点击悬浮窗“关闭”按钮临时关闭了桌面歌词。
+  /// 当用户再次“点开软件”（应用回到前台）时，会自动重置为 false，
+  /// 使得桌面歌词重新“自启动”，而不会因为临时关闭悬浮窗而永久关闭设置开关。
+  bool _desktopLyricsUserDismissed = false;
 
   Song? currentSong;
   List<Song> queue = const [];
@@ -1869,6 +1873,7 @@ class PlayerController extends ChangeNotifier {
   Future<void> setDesktopLyricsEnabled(bool enabled) async {
     if (desktopLyricsEnabled == enabled) return;
     desktopLyricsEnabled = enabled;
+    _desktopLyricsUserDismissed = false;
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_desktopLyricsEnabledSettingKey, enabled);
     notifyListeners();
@@ -1893,8 +1898,10 @@ class PlayerController extends ChangeNotifier {
 
   bool get _shouldShowDesktopLyrics {
     return desktopLyricsEnabled &&
-        currentSong != null &&
-        (!_isAppForeground || _desktopLyricsPreviewVisible);
+        (_desktopLyricsPreviewVisible ||
+            (!_desktopLyricsUserDismissed &&
+                currentSong != null &&
+                !_isAppForeground));
   }
 
   Future<void> _syncDesktopLyricsVisibility() async {
@@ -2169,6 +2176,10 @@ class PlayerController extends ChangeNotifier {
   bool get isDesktopLyricsSupported => DesktopLyricsService.isSupportedPlatform;
 
   void setAppForeground(bool isForeground) {
+    if (isForeground) {
+      // 点开软件或切回前台时，重置用户本次临时关闭悬浮窗的标记，恢复自启动
+      _desktopLyricsUserDismissed = false;
+    }
     if (_isAppForeground == isForeground) return;
     _isAppForeground = isForeground;
     if (desktopLyricsEnabled) {
@@ -2180,6 +2191,9 @@ class PlayerController extends ChangeNotifier {
   Future<void> setDesktopLyricsPreviewVisible(bool visible) async {
     if (_desktopLyricsPreviewVisible == visible) return;
     _desktopLyricsPreviewVisible = visible;
+    if (visible) {
+      _desktopLyricsUserDismissed = false;
+    }
     await _syncDesktopLyricsVisibility();
   }
 
@@ -2187,15 +2201,18 @@ class PlayerController extends ChangeNotifier {
     required bool visible,
     required bool userClosed,
   }) async {
-    if (!userClosed || !desktopLyricsEnabled) {
+    if (!userClosed) {
       return;
     }
-    desktopLyricsEnabled = false;
+    // 用户在桌面歌词悬浮窗点击“关闭”按钮：仅临时隐藏本次后台悬浮窗，
+    // 不修改持久化设置开关 desktopLyricsEnabled，保证下次“点开软件自启动”。
+    _desktopLyricsUserDismissed = true;
     _desktopLyricsPreviewVisible = false;
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool(_desktopLyricsEnabledSettingKey, false);
     notifyListeners();
   }
+
+  /// 获取用户是否在当前后台会话中临时关闭了桌面歌词
+  bool get isDesktopLyricsUserDismissed => _desktopLyricsUserDismissed;
 
   Future<bool> checkDesktopLyricsPermission() =>
       _desktopLyrics.checkPermission();
@@ -2358,6 +2375,7 @@ class PlayerController extends ChangeNotifier {
     unawaited(audioPlayer.setSpeed(playbackSpeed));
     if (desktopLyricsEnabled) {
       unawaited(_desktopLyrics.updateSettings(desktopLyricsSettings));
+      unawaited(_syncDesktopLyricsVisibility());
     }
     _syncListeningTimeTracker();
     unawaited(_refreshEqualizerConfig());

@@ -191,7 +191,6 @@ class _KaMusicAppState extends State<KaMusicApp> with WidgetsBindingObserver {
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     super.didChangeAppLifecycleState(state);
-    if (!_player.desktopLyricsEnabled) return;
     switch (state) {
       case AppLifecycleState.resumed:
         _player.setAppForeground(true);
