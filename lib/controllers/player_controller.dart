@@ -666,6 +666,27 @@ class PlayerController extends ChangeNotifier {
     return true;
   }
 
+  /// 车机全屏「下一首播放」：把当前歌曲的副本插入到 currentIndex+1，
+  /// 绕开 [addToQueue] 的"与当前曲相同即忽略"guard 与去重移除逻辑。
+  Future<bool> playCurrentSongNext() async {
+    final cur = currentSong;
+    final index = currentIndex;
+    if (cur == null || index < 0 || index >= queue.length) {
+      return false;
+    }
+    final nextQueue = List<Song>.of(queue);
+    nextQueue.insert(index + 1, cur);
+    queue = nextQueue;
+    await _audioHandler.setSongQueue(
+      queueSongs: queue,
+      queueIndex: currentIndex,
+      currentSong: currentSong,
+    );
+    _saveQueueState();
+    notifyListeners();
+    return true;
+  }
+
   Future<void> setAudioQuality(
     AudioQuality quality, {
     bool reloadCurrent = false,
@@ -1782,6 +1803,17 @@ class PlayerController extends ChangeNotifier {
   /// Set a sleep timer that finishes the current song, then stops.
   void setSleepTimerFinishSong(Duration duration) {
     setSleepTimer(duration, finishCurrentSong: true);
+  }
+
+  /// 车机「播完当前单曲」：立即置位（不依赖 1s tick），使原生面板即时反映勾选与副标题。
+  void setSleepFinishCurrentSongNow() {
+    _sleepTimer?.cancel();
+    _sleepTimer = null;
+    _sleepTimerEnd = null;
+    sleepTimerRemaining = null;
+    _sleepFinishCurrentSongOption = true;
+    _sleepFinishCurrentSong = true;
+    notifyListeners();
   }
 
   /// Update the sleep timer finish song option dynamically.

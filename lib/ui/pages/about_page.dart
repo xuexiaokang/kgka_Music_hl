@@ -142,7 +142,7 @@ class _AboutPageState extends State<AboutPage> {
                     const _InfoRow(label: '当前版本', value: AppConfig.appVersion),
                     const _InfoRow(
                       label: '作者',
-                      value: '小埋-XiaoMai，其他Github开发者',
+                      value: '小埋-XiaoMai，其他Github开发者，小康',
                     ),
                     _InfoRow(
                       label: '服务地址',

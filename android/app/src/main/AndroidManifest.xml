@@ -36,11 +36,27 @@
               android:name="io.flutter.embedding.android.NormalTheme"
               android:resource="@style/NormalTheme"
               />
+            <!-- 关掉 Impeller(Vulkan)，回退 Skia + OpenGL ES，与原生酷我同一 GPU 渲染栈；
+                 用于验证车机弱 GPU 上"KA 全屏饿死浮窗视频"是否由 Impeller/Vulkan 独占提交导致。
+                 车机验证后若确认有效再定去留。 -->
+            <meta-data
+              android:name="io.flutter.embedding.android.EnableImpeller"
+              android:value="false" />
             <intent-filter>
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
         </activity>
+        <!-- 全原生车机全屏播放器（HWUI，覆盖 FlutterActivity 使其停帧，对齐酷我渲染路径） -->
+        <activity
+            android:name=".CarPlayerActivity"
+            android:exported="false"
+            android:launchMode="singleTop"
+            android:excludeFromRecents="true"
+            android:screenOrientation="sensorLandscape"
+            android:hardwareAccelerated="true"
+            android:theme="@android:style/Theme.Black.NoTitleBar.Fullscreen"
+            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode" />
         <service
             android:name="com.ryanheise.audioservice.AudioService"
             android:foregroundServiceType="mediaPlayback"

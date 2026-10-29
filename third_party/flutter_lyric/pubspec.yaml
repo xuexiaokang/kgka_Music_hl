@@ -1,0 +1,21 @@
+name: flutter_lyric
+description: >-
+  Vendored fork of flutter_lyric 3.0.7 (ozyl/flutter_lyric, MIT). Local patch only:
+  the active-line karaoke highlight is drawn with a clipPath + repainting the (already
+  opaque-colored) highlight TextPainter instead of two offscreen canvas.saveLayer(dstIn)
+  passes. This mirrors how native KuWo draws its karaoke (Canvas.clipRect + drawText,
+  zero offscreen layers), cutting the per-frame GPU cost on weak car SoCs so a
+  concurrent floating-window video stops dropping frames. 60fps karaoke is preserved.
+  See render/lyric_painter.dart (drawHighlight).
+version: 3.0.7+ka2
+homepage: https://github.com/ozyl/flutter_lyric
+
+environment:
+  sdk: '>=2.12.0 <4.0.0'
+  flutter: ">=2.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+flutter:
