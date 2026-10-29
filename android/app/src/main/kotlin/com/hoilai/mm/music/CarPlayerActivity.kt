@@ -467,40 +467,32 @@ class CarPlayerActivity : Activity() {
 
         discWrap.addView(discGroup, FrameLayout.LayoutParams(sizePx, sizePx, Gravity.CENTER))
 
-        // 静态光泽层(不随盘旋转,模拟固定光源下的胶片反光):
-        // ① 左上环境柔光 ② 一道斜向镜面高光带(中间亮、两端渐隐)
-        val glossAmbient = View(this).apply {
+        // 静态光泽层(不随盘旋转,模拟固定光源下黑胶的宽柔反射):
+        // 主反射在左上、次反射在右下,均为宽而淡的径向柔光(避免"贴一条"的假高光带)
+        val glossMain = View(this).apply {
             background = GradientDrawable().apply {
                 shape = GradientDrawable.OVAL
                 gradientType = GradientDrawable.RADIAL_GRADIENT
-                setGradientCenter(0.34f, 0.28f)
-                gradientRadius = sizePx * 0.8f
-                setColors(intArrayOf(0x24FFFFFF, 0x0AFFFFFF, 0x00FFFFFF))
-            }
-        }
-        discWrap.addView(glossAmbient, FrameLayout.LayoutParams(sizePx, sizePx, Gravity.CENTER))
-
-        val glossSheen = View(this).apply {
-            background = GradientDrawable().apply {
-                shape = GradientDrawable.RECTANGLE
-                gradientType = GradientDrawable.LINEAR_GRADIENT // 默认水平(左→右)
+                setGradientCenter(0.32f, 0.26f)
+                gradientRadius = sizePx * 0.95f
                 setColors(
-                    intArrayOf(
-                        0x00FFFFFF, 0x00FFFFFF, 0x22FFFFFF, 0x4DFFFFFF,
-                        0x22FFFFFF, 0x00FFFFFF, 0x00FFFFFF
-                    ),
-                    floatArrayOf(0f, 0.30f, 0.44f, 0.52f, 0.60f, 0.74f, 1f)
+                    intArrayOf(0x1EFFFFFF, 0x0BFFFFFF, 0x00FFFFFF),
+                    floatArrayOf(0f, 0.5f, 1f)
                 )
             }
-            rotation = 45f // 整层斜置得到斜向高光带(圆形裁剪旋转后仍是正圆)
-            outlineProvider = object : ViewOutlineProvider() {
-                override fun getOutline(view: View, outline: android.graphics.Outline) {
-                    outline.setOval(0, 0, view.width, view.height)
-                }
-            }
-            clipToOutline = true
         }
-        discWrap.addView(glossSheen, FrameLayout.LayoutParams(sizePx, sizePx, Gravity.CENTER))
+        discWrap.addView(glossMain, FrameLayout.LayoutParams(sizePx, sizePx, Gravity.CENTER))
+
+        val glossSecondary = View(this).apply {
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.OVAL
+                gradientType = GradientDrawable.RADIAL_GRADIENT
+                setGradientCenter(0.72f, 0.8f)
+                gradientRadius = sizePx * 0.72f
+                setColors(intArrayOf(0x14FFFFFF, 0x00FFFFFF), floatArrayOf(0f, 1f))
+            }
+        }
+        discWrap.addView(glossSecondary, FrameLayout.LayoutParams(sizePx, sizePx, Gravity.CENTER))
 
         // 左右滑动切歌（对齐 Flutter _LandscapeArtworkShowcase.onHorizontalDragEnd）
         val discGesture = android.view.GestureDetector(this,
@@ -543,36 +535,30 @@ class CarPlayerActivity : Activity() {
         }
         c.drawCircle(cx, cy, r, base)
 
-        // 同心沟槽:模拟真实唱片——较疏的细纹 + 几道轨道分隔的光滑间隙(间隙处稍反光)
+        // 同心沟槽:真实唱片是极细极密的低对比纹理(不是稀疏高对比环,避免"光盘/靶心"感)
         val groove = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             style = Paint.Style.STROKE
-            strokeWidth = (size * 0.0026f).coerceAtLeast(1f)
+            strokeWidth = (size * 0.0016f).coerceAtLeast(1f)
         }
-        val inner = r * 0.665f
+        val inner = r * 0.66f
         val outer = r * 0.965f
-        val rings = 20
+        val rings = 46
         val step = (outer - inner) / rings
-        // 轨道分隔间隙所在的半径比例(真实唱片按曲目分段)
-        val gaps = floatArrayOf(0.74f, 0.81f, 0.88f)
         var rr = inner
         var i = 0
         while (i <= rings) {
-            val rf = rr / r
-            val inGap = gaps.any { kotlin.math.abs(rf - it) < 0.02f }
-            if (!inGap) {
-                groove.color = if (i % 2 == 0) 0x14FFFFFF else 0x30000000
-                c.drawCircle(cx, cy, rr, groove)
-            }
+            groove.color = if (i % 2 == 0) 0x0AFFFFFF else 0x1A000000
+            c.drawCircle(cx, cy, rr, groove)
             rr += step
             i++
         }
-        // 间隙处的反光边界细线(槽间受光)
+        // 两处很淡的曲目边界(真实唱片偶有稍宽静音槽),低对比不抢戏
         val sep = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             style = Paint.Style.STROKE
-            strokeWidth = (size * 0.0018f).coerceAtLeast(1f)
-            color = 0x26FFFFFF
+            strokeWidth = (size * 0.004f).coerceAtLeast(1f)
+            color = 0x14FFFFFF
         }
-        gaps.forEach { rf -> c.drawCircle(cx, cy, r * rf, sep) }
+        floatArrayOf(0.80f, 0.90f).forEach { rf -> c.drawCircle(cx, cy, r * rf, sep) }
 
         // 标签孔外的细暗环:把中心封面与黑胶盘体分出一圈边界
         val labelDark = Paint(Paint.ANTI_ALIAS_FLAG).apply {
