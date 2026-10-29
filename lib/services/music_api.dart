@@ -510,9 +510,31 @@ class MusicApi {
     String id, {
     int page = 1,
     int pageSize = 30,
+    bool fetchAll = false,
   }) async {
-    final songPage = await albumSongPage(id, page: page, pageSize: pageSize);
-    return songPage.songs;
+    if (!fetchAll) {
+      final songPage = await albumSongPage(id, page: page, pageSize: pageSize);
+      return songPage.songs;
+    }
+    // /album/songs 对 pagesize 有上限（实测 ≥60 直接返回空），因此不能用一个
+    // 超大 pageSize 一次取全；按 50 分页循环，直到某页不满一页（或空）为止。
+    final allSongs = <Song>[];
+    var currentPage = 1;
+    const perPage = 50;
+    while (true) {
+      final songPage = await albumSongPage(
+        id,
+        page: currentPage,
+        pageSize: perPage,
+      );
+      final songs = songPage.songs;
+      if (songs.isEmpty) break;
+      allSongs.addAll(songs);
+      if (songPage.rawItemCount < perPage) break;
+      currentPage++;
+      if (currentPage > 100) break; // 安全上限，防止异常分页死循环
+    }
+    return allSongs;
   }
 
   Future<SongPage> albumSongPage(

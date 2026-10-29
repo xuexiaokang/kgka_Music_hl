@@ -240,7 +240,7 @@ class _PlaylistDetailPageState extends State<PlaylistDetailPage> {
         ? (widget.playlist.albumId ?? widget.playlist.id)
         : widget.playlist.id;
     return _isAlbum
-        ? widget.api.albumSongs(id, page: 1, pageSize: 5000)
+        ? widget.api.albumSongs(id, fetchAll: true)
         : widget.api.playlistSongs(id, fetchAll: true);
   }
 

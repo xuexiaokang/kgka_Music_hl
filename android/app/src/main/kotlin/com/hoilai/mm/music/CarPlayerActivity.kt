@@ -9,6 +9,7 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Matrix
 import android.graphics.Paint
+import android.graphics.RadialGradient
 import android.graphics.Shader
 import android.graphics.drawable.GradientDrawable
 import android.os.Bundle
@@ -437,37 +438,19 @@ class CarPlayerActivity : Activity() {
     private fun lpWeight(weight: Float): LinearLayout.LayoutParams =
         LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, weight)
 
-    /** 构建 Flutter 风深色黑胶唱片：径向渐变盘体 + 同心环 + 中心圆形封面，整体随 discGroup 旋转。 */
+    /** 网易云风黑胶：细密同心沟槽盘体 + 中心封面(约50%) + 静态高光 + 中心轴孔；盘体随 discGroup 旋转。 */
     private fun buildDisc(sizePx: Int) {
         discWrap.removeAllViews()
+
+        // 旋转组：黑胶盘体(细密纹路位图) + 中心圆形封面。沟槽是径向对称的，
+        // 所以旋转时只有封面看得出在转，符合网易云观感。
         discGroup = FrameLayout(this)
 
-        val glow = View(this).apply {
-            background = GradientDrawable().apply {
-                gradientType = GradientDrawable.RADIAL_GRADIENT
-                setGradientCenter(0.5f, 0.5f)
-                gradientRadius = sizePx / 2f
-                // 深色哑光黑胶：中心略亮、外缘渐暗，去除原先的白色发光高光
-                setColors(intArrayOf(0xFF2A2A30.toInt(), 0xFF1A1A1F.toInt(), 0xFF0E0E11.toInt()))
-            }
-            outlineProvider = object : ViewOutlineProvider() {
-                override fun getOutline(view: View, outline: android.graphics.Outline) {
-                    outline.setOval(0, 0, view.width, view.height)
-                }
-            }
-            // 仅裁剪成圆形：去掉 elevation 投影，消除高亮光晕。
-            clipToOutline = true
+        val vinyl = ImageView(this).apply {
+            setImageBitmap(makeVinylBitmap(sizePx))
+            scaleType = ImageView.ScaleType.FIT_XY
         }
-        discGroup.addView(glow, FrameLayout.LayoutParams(sizePx, sizePx, Gravity.CENTER))
-
-        for (ratio in floatArrayOf(.36f, .52f, .68f, .82f)) {
-            val ring = View(this).apply {
-                setBackgroundResource(R.drawable.bg_disc_ring)
-                isClickable = false
-            }
-            val d = (sizePx * ratio).toInt()
-            discGroup.addView(ring, FrameLayout.LayoutParams(d, d, Gravity.CENTER))
-        }
+        discGroup.addView(vinyl, FrameLayout.LayoutParams(sizePx, sizePx, Gravity.CENTER))
 
         val cover = ImageView(this).apply {
             // 圆形封面在位图里预抗锯齿(circleize)，故不再用 clipToOutline 硬裁(硬裁边缘有锯齿)
@@ -475,10 +458,22 @@ class CarPlayerActivity : Activity() {
             setLayerType(View.LAYER_TYPE_HARDWARE, null)
         }
         disc = cover
-        val coverSize = (sizePx * 0.70f).toInt()
+        val coverSize = (sizePx * 0.64f).toInt()
         discGroup.addView(cover, FrameLayout.LayoutParams(coverSize, coverSize, Gravity.CENTER))
 
         discWrap.addView(discGroup, FrameLayout.LayoutParams(sizePx, sizePx, Gravity.CENTER))
+
+        // 静态柔光：极淡的左上环境光(主高光在盘体外缘,已烘焙进位图),不随盘旋转。
+        val gloss = View(this).apply {
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.OVAL
+                gradientType = GradientDrawable.RADIAL_GRADIENT
+                setGradientCenter(0.34f, 0.28f)
+                gradientRadius = sizePx * 0.75f
+                setColors(intArrayOf(0x16FFFFFF, 0x06FFFFFF, 0x00FFFFFF))
+            }
+        }
+        discWrap.addView(gloss, FrameLayout.LayoutParams(sizePx, sizePx, Gravity.CENTER))
 
         // 左右滑动切歌（对齐 Flutter _LandscapeArtworkShowcase.onHorizontalDragEnd）
         val discGesture = android.view.GestureDetector(this,
@@ -501,6 +496,67 @@ class CarPlayerActivity : Activity() {
         // 换歌后封面图重挂到新的 disc；恢复旋转动画与当前封面
         coverUrl?.let { loadCover(it) }
         if (playing) startRotation()
+    }
+
+    /** 生成网易云风黑胶盘体位图(参数取自反编译网易云车机版唱片贴图 ap9.png 实测)。 */
+    private fun makeVinylBitmap(size: Int): Bitmap {
+        val bmp = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
+        val c = Canvas(bmp)
+        val cx = size / 2f
+        val cy = size / 2f
+        val r = size / 2f
+
+        // 近黑盘体(径向对称;方向性柔光由不旋转的 gloss 层叠加,故此处不加高光带)
+        val base = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            shader = RadialGradient(
+                cx, cy, r,
+                intArrayOf(0xFF1B1B1F.toInt(), 0xFF121215.toInt(), 0xFF0A0A0C.toInt()),
+                floatArrayOf(0f, 0.7f, 1f), Shader.TileMode.CLAMP
+            )
+        }
+        c.drawCircle(cx, cy, r, base)
+
+        // 细密同心沟槽:封面外(0.65R)到盘边(0.99R),约40道,极淡(网易云沟槽很细很淡)
+        val groove = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            strokeWidth = (size * 0.0022f).coerceAtLeast(1f)
+        }
+        val inner = r * 0.65f
+        val outer = r * 0.99f
+        val rings = 40
+        val step = (outer - inner) / rings
+        var rr = inner
+        var i = 0
+        while (i < rings) {
+            groove.color = if (i % 2 == 0) 0x0DFFFFFF else 0x1F000000
+            c.drawCircle(cx, cy, rr, groove)
+            rr += step
+            i++
+        }
+
+        // 标签孔外的细暗环:把中心封面与黑胶盘体分出一圈边界
+        val labelDark = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            strokeWidth = (size * 0.01f).coerceAtLeast(1f)
+            color = 0x66000000
+        }
+        c.drawCircle(cx, cy, r * 0.635f, labelDark)
+
+        // 外缘:仅一丝极淡反光 + 最外暗收边(网易云盘边是干净暗边,无强高光)
+        val rimFaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            strokeWidth = (size * 0.006f).coerceAtLeast(1f)
+            color = 0x14FFFFFF
+        }
+        c.drawCircle(cx, cy, r * 0.985f, rimFaint)
+        val rim = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            strokeWidth = (size * 0.01f).coerceAtLeast(1f)
+            color = 0xFF060607.toInt()
+        }
+        c.drawCircle(cx, cy, r - rim.strokeWidth / 2f, rim)
+
+        return bmp
     }
 
     // --------------------------------------------------------- 队列面板
