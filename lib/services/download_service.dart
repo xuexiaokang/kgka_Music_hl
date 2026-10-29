@@ -5,6 +5,9 @@ import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
+import 'id3_tag_writer.dart';
 
 import '../config/app_config.dart';
 import '../models/music_models.dart';
@@ -47,11 +50,48 @@ class DownloadService {
   int _running = 0;
   final List<_PendingTask> _queue = [];
 
+  static const _customDownloadDirKey = 'settings.custom_download_dir';
+
+  /// 获取用户自定义下载目录（若未设置返回 null）。
+  Future<String?> getCustomDownloadDir() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      return prefs.getString(_customDownloadDirKey);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// 设置自定义下载目录（传 null 或空重置为系统默认）。
+  Future<void> setCustomDownloadDir(String? path) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      if (path == null || path.isEmpty) {
+        await prefs.remove(_customDownloadDirKey);
+      } else {
+        await prefs.setString(_customDownloadDirKey, path);
+      }
+    } catch (_) {}
+  }
+
   /// 持久下载目录。
   ///
   /// Android 优先使用系统公共下载目录（/storage/emulated/0/Download/KA Music），
   /// 需要存储权限；其他平台或获取失败时回退到应用文档目录。
   Future<Directory> downloadDir() async {
+    try {
+      final customPath = await getCustomDownloadDir();
+      if (customPath != null && customPath.trim().isNotEmpty) {
+        final customDir = Directory(customPath.trim());
+        if (!customDir.existsSync()) {
+          await customDir.create(recursive: true);
+        }
+        return customDir;
+      }
+    } catch (e) {
+      debugPrint('[KA Music] Custom download dir error: $e');
+    }
+
     if (Platform.isAndroid) {
       try {
         // Android 11+ 需要 MANAGE_EXTERNAL_STORAGE 权限才能写入公共目录
@@ -250,6 +290,19 @@ class DownloadService {
       // 下载完成，重命名 .part 为最终文件
       if (partFile.existsSync()) {
         await partFile.rename(targetPath);
+      }
+
+      // 下载完成后自动注入 ID3 标签、封面与元数据（MP3 格式）
+      if (task.kind == DownloadTaskKind.download && targetPath.endsWith('.mp3')) {
+        unawaited(
+          Id3TagWriter.injectMetadata(
+            filePath: targetPath,
+            song: task.song,
+          ).catchError((e) {
+            debugPrint('[Download] inject ID3 metadata failed: $e');
+            return false;
+          }),
+        );
       }
 
       return targetPath;

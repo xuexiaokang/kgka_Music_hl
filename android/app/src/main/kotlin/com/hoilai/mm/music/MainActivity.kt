@@ -46,6 +46,8 @@ class MainActivity : AudioServiceActivity() {
     private var dynamicsProcessing: DynamicsProcessing? = null
     private var dynamicsProcessingSessionId: Int? = null
     private var pendingPermissionResult: MethodChannel.Result? = null
+    private var deepLinkChannel: MethodChannel? = null
+    private var initialDeepLink: String? = null
 
     companion object {
         private const val REQUEST_READ_AUDIO = 1001
@@ -97,6 +99,26 @@ class MainActivity : AudioServiceActivity() {
         // 全原生车机播放器桥接：双向 channel，Dart 调 open 拉起 CarPlayerActivity，
         // 传输事件经 ka.car_player/flutter 回传 Dart。
         CarPlayerBridge.init(this, flutterEngine.dartExecutor.binaryMessenger)
+
+        deepLinkChannel = MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            "kgka_music_hl/deep_link"
+        ).apply {
+            setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "getInitialLink" -> {
+                        result.success(initialDeepLink)
+                        initialDeepLink = null
+                    }
+                    else -> result.notImplemented()
+                }
+            }
+        }
+        intent?.dataString?.let {
+            if (it.startsWith("kgka://")) {
+                initialDeepLink = it
+            }
+        }
 
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "kgka_music_hl/screen")
             .setMethodCallHandler { call, result ->
@@ -904,13 +926,13 @@ class MainActivity : AudioServiceActivity() {
                 20000.0f, // cutoffFrequency
                 50.0f, // attackTime
                 300.0f, // releaseTime
-                2.0f, // ratio: 4->2，压缩温和化，保留动态
-                -18.0f, // threshold: -15 -> -18，略放宽，让更多内容不触发压缩
-                6.0f, // kneeWidth: 2 -> 6，软拐点，过渡更平滑
+                2.0f, // ratio: 2:1，温和动态压缩
+                -16.0f, // threshold: -16dB
+                6.0f, // kneeWidth: 6dB 软拐点平滑过渡
                 -60.0f, // noiseGateThreshold
                 1.0f, // expanderRatio
-                2.0f, // preGain
-                4.0f // postGain: 0 -> 4，makeup gain 增益补偿，整体提亮（老歌明显受益）
+                0.0f, // preGain: 0dB
+                0.0f // postGain: 0dB，避免产生 6dB 音量突变或削顶破音
             )
 
             val limiter = DynamicsProcessing.Limiter(
@@ -1037,6 +1059,16 @@ class MainActivity : AudioServiceActivity() {
             contentResolver.openInputStream(uri)?.use { it.readBytes() }
         } catch (e: Exception) {
             null
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        intent.dataString?.let { uri ->
+            if (uri.startsWith("kgka://")) {
+                deepLinkChannel?.invokeMethod("onDeepLink", uri)
+            }
         }
     }
 

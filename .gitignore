@@ -59,3 +59,9 @@ logs/
 
 # 本地构建产物（含 keystore/密码/APK），严禁入库
 build-artifacts/
+
+# 本地正式签名私钥/口令(勿入库)
+android/release-keystore.p12
+android/*.p12
+android/*.jks
+android/*.keystore

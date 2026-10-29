@@ -1,6 +1,10 @@
+// ignore_for_file: use_null_aware_elements
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:audio_service/audio_service.dart';
+import 'package:audio_session/audio_session.dart';
+import 'package:flutter/foundation.dart';
 import 'package:just_audio/just_audio.dart';
 
 import '../models/music_models.dart';
@@ -19,6 +23,11 @@ class MusicAudioHandler extends BaseAudioHandler
   Future<void> Function()? _onPrevious;
   int _queueIndex = 0;
   Song? _currentSong;
+  bool _bluetoothLyricsTitleSync = false;
+
+  void setBluetoothLyricsTitleSync(bool enabled) {
+    _bluetoothLyricsTitleSync = enabled;
+  }
 
   void attachTransportControls({
     required Future<void> Function() onNext,
@@ -56,8 +65,8 @@ class MusicAudioHandler extends BaseAudioHandler
   }
 
   @override
-  Future<void> updateQueue(List<MediaItem> newQueue) async {
-    queue.add(newQueue);
+  Future<void> updateQueue(List<MediaItem> queue) async {
+    this.queue.add(queue);
   }
 
   Future<void> setSongQueue({
@@ -84,21 +93,50 @@ class MusicAudioHandler extends BaseAudioHandler
     String? lyricText,
     String? translationText,
     String? romanizationText,
+    String? fullLyricLrc,
   }) {
     final song = _currentSong;
     if (song == null) return;
+
+    // 适配 LyricInfo 标准（ColorOS/OriginOS 锁屏岛与状态栏歌词）
+    String? lyricInfoJson;
+    if (lyricText != null && lyricText.isNotEmpty) {
+      final lyricMap = <String, dynamic>{
+        'songName': song.title,
+        'artist': song.artist,
+        if (song.albumName != null && song.albumName!.isNotEmpty)
+          'album': song.albumName,
+        'songId': song.id.isNotEmpty ? song.id : song.hash,
+        'lyric': fullLyricLrc?.isNotEmpty == true ? fullLyricLrc : lyricText,
+        if (translationText != null && translationText.isNotEmpty)
+          'translation': translationText,
+        if (romanizationText != null && romanizationText.isNotEmpty)
+          'roma': romanizationText,
+      };
+      lyricInfoJson = jsonEncode(lyricMap);
+    }
+
     final Map<String, dynamic> extras = {
       'hash': song.hash,
       'songId': song.id,
-      'lyric': ?lyricText,
-      'currentLyric': ?lyricText,
-      'translationLyric': ?translationText,
-      'romanLyric': ?romanizationText,
+      if (lyricText != null) 'lyric': lyricText,
+      if (lyricText != null) 'currentLyric': lyricText,
+      if (translationText != null) 'translationLyric': translationText,
+      if (romanizationText != null) 'romanLyric': romanizationText,
+      if (fullLyricLrc != null) 'full_lrc': fullLyricLrc,
+      if (fullLyricLrc != null) 'org.akanework.lyricinfo.FULL_LYRICS': fullLyricLrc,
+      if (lyricText != null) 'org.akanework.lyricinfo.CURRENT_LYRIC': lyricText,
+      if (lyricInfoJson != null) 'lyricInfo': lyricInfoJson,
     };
+
+    final title = (_bluetoothLyricsTitleSync && lyricText != null && lyricText.isNotEmpty)
+        ? lyricText
+        : song.title;
+
     final updated = MediaItem(
       id: song.hash.isEmpty ? song.id : song.hash,
       album: song.albumName,
-      title: song.title,
+      title: title,
       artist: song.artist,
       duration: song.duration,
       artUri: song.coverUrl == null ? null : Uri.tryParse(song.coverUrl!),
@@ -107,15 +145,93 @@ class MusicAudioHandler extends BaseAudioHandler
     mediaItem.add(updated);
   }
 
+  int _playSessionId = 0;
+
   @override
   Future<void> play() async {
-    unawaited(audioPlayer.play());
+    final sessionId = ++_playSessionId;
+    Object? lastError;
+
+    final isMobileOrMac =
+        !kIsWeb &&
+        (defaultTargetPlatform == TargetPlatform.android ||
+            defaultTargetPlatform == TargetPlatform.iOS ||
+            defaultTargetPlatform == TargetPlatform.macOS);
+
+    // iOS 首次设置音源后，just_audio 可能短暂发出 playing=true，
+    // 随后因音频会话激活还未稳定而回落为 false。只等到第一个 true
+    // 会把这种情况误判为自动播放成功，而用户再点一次就能播放。
+    // 在这里确认播放状态能短暂保持；若首次回落，重新激活会话并重试。
+    for (var attempt = 0; attempt < 3; attempt++) {
+      if (sessionId != _playSessionId) return;
+      try {
+        debugPrint(
+          '[KA Music][playback] start-attempt=${attempt + 1} '
+          'state=${audioPlayer.processingState.name}',
+        );
+        if (isMobileOrMac) {
+          try {
+            final session = await AudioSession.instance;
+            await session.setActive(true);
+          } catch (e) {
+            debugPrint('[KA Music][playback] audio session setActive failed: $e');
+          }
+        }
+        if (sessionId != _playSessionId) return;
+
+        final playback = audioPlayer.play();
+        await Future.any<void>([
+          audioPlayer.playerStateStream
+              .firstWhere((state) => state.playing)
+              .then<void>((_) {}),
+          playback.then<void>((_) {
+            if (!audioPlayer.playing && sessionId == _playSessionId) {
+              throw StateError('播放器未保持播放状态');
+            }
+          }),
+        ]).timeout(const Duration(seconds: 3));
+
+        if (sessionId != _playSessionId) return;
+
+        // playing 在 play() 后会立即变为 true，稍后再检查一次，
+        // 避免把瞬时变化误当成已经真正启播。
+        await Future<void>.delayed(const Duration(milliseconds: 500));
+        if (sessionId != _playSessionId) return;
+
+        if (audioPlayer.playing) {
+          debugPrint(
+            '[KA Music][playback] start-attempt=${attempt + 1} stable',
+          );
+          return;
+        }
+        lastError = StateError('播放启动后立即停止');
+      } catch (error) {
+        if (sessionId != _playSessionId) return;
+        lastError = error;
+        debugPrint(
+          '[KA Music][playback] start-attempt=${attempt + 1} failed: $error',
+        );
+      }
+
+      if (sessionId != _playSessionId) return;
+      if (attempt < 2) {
+        await Future<void>.delayed(const Duration(milliseconds: 200));
+      }
+    }
+
+    if (sessionId == _playSessionId) {
+      throw StateError('无法自动开始播放：${lastError ?? '未知错误'}');
+    }
+
   }
 
   @override
   Future<void> pause() async {
+    _playSessionId++;
     await audioPlayer.pause();
   }
+
+
 
   @override
   Future<void> seek(Duration position) async {
@@ -134,6 +250,7 @@ class MusicAudioHandler extends BaseAudioHandler
 
   @override
   Future<void> stop() async {
+    _playSessionId++;
     await audioPlayer.stop();
   }
 

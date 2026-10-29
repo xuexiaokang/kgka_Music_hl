@@ -316,8 +316,9 @@ class PlaylistSummary {
   }
 
   factory PlaylistSummary.fromSimilar(Map<String, dynamic> json) {
+    final globalCollectionId = asString(json['global_collection_id']) ?? '';
     return PlaylistSummary(
-      id: asString(json['global_collection_id']) ?? '',
+      id: globalCollectionId,
       title: asString(json['collection_name']) ?? '未知歌单',
       coverUrl: normalizeImageUrl(
         asString(json['flexible_cover']) ?? asString(json['cover']),
@@ -325,6 +326,7 @@ class PlaylistSummary {
       songCount: asInt(json['song_count']) ?? asInt(json['count']),
       playCount: asInt(json['heat']),
       creatorName: asString(json['user_name']),
+      sourceGlobalId: globalCollectionId.isNotEmpty ? globalCollectionId : null,
     );
   }
   factory PlaylistSummary.fromUser(
@@ -358,9 +360,10 @@ class PlaylistSummary {
   }
 
   factory PlaylistSummary.fromDetail(Map<String, dynamic> json) {
+    final globalCollectionId = asString(json['global_collection_id']);
     return PlaylistSummary(
       id:
-          asString(json['global_collection_id']) ??
+          globalCollectionId ??
           asString(json['listid']) ??
           '',
       title: asString(json['name']) ?? '歌单',
@@ -371,7 +374,7 @@ class PlaylistSummary {
       playCount: asInt(json['heat']),
       creatorName: asString(json['list_create_username']),
       creatorUserId: asString(json['list_create_userid']),
-      sourceGlobalId: asString(json['list_create_gid']),
+      sourceGlobalId: asString(json['list_create_gid']) ?? globalCollectionId,
       sourceListId: asString(json['list_create_listid']),
     );
   }
@@ -440,6 +443,7 @@ class Song {
     this.albumName,
     this.coverUrl,
     this.duration,
+    this.releaseDate,
     this.artists = const [],
     this.isCloudDrive = false,
     this.source = SongSource.kugou,
@@ -454,6 +458,17 @@ class Song {
   final String? albumName;
   final String? coverUrl;
   final Duration? duration;
+
+  /// 发行日期（精确到日）。
+  ///
+  /// - 酷狗：`PublishDate`，本身就是 `2003-07-31` 这种日期字符串
+  /// - 网易云：歌曲层 `publishTime`，毫秒时间戳，实测是当天 00:00（北京时间）
+  ///
+  /// 接口没给时为空，界面显示「未知」。
+  final DateTime? releaseDate;
+
+  /// 发行年份（[releaseDate] 的便捷取值）。
+  int? get releaseYear => releaseDate?.year;
   final List<ArtistRef> artists;
 
   /// 标记是否为云盘歌曲。云盘歌曲的播放地址需通过 `/user/cloud/url` 获取。
@@ -493,38 +508,38 @@ class Song {
     // 后缀；后缀为空时直接使用歌名本身，避免多余空格。
     // 兜底：最近播放等接口或非标内容（播客/电台）可能缺失上述字段，
     // 此时回退到 FileName 等备选字段，并剥离「歌手 - 」形式的歌手前缀。
+    final resolvedArtist = artistName.isNotEmpty
+        ? artistName
+        : asString(json['SingerName']) ??
+              asString(json['author_name']) ??
+              asString(json['singername']) ??
+              asString(json['singer_name']) ??
+              '未知艺人';
     final oriSongName = asString(json['OriSongName']);
     final suffix = asString(json['Suffix']) ?? '';
     var title = oriSongName == null || oriSongName.isEmpty
         ? null
         : (suffix.isNotEmpty ? '$oriSongName $suffix' : oriSongName);
-    if (title == null) {
-      final displayName =
-          asString(json['FileName']) ??
-          asString(json['songname']) ??
-          asString(json['name']) ??
-          asString(json['audio_name']);
-      title = displayName == null
-          ? null
-          : stripArtistNamePrefix(displayName, artistName);
+    title ??=
+        asString(json['FileName']) ??
+        asString(json['songname']) ??
+        asString(json['name']) ??
+        asString(json['audio_name']);
+    if (title != null) {
+      title = stripArtistNamePrefix(title, resolvedArtist);
     }
 
     return Song(
       id: songId ?? hash,
       title: title ?? '未知歌曲',
-      artist: artistName.isNotEmpty
-          ? artistName
-          : asString(json['SingerName']) ??
-                asString(json['author_name']) ??
-                asString(json['singername']) ??
-                asString(json['singer_name']) ??
-                '未知艺人',
+      artist: resolvedArtist,
       hash: hash,
       albumId: asString(json['AlbumID']) ?? asString(json['album_id']),
       albumAudioId: songId,
       albumName: asString(json['AlbumName']) ?? asString(json['album_name']),
       coverUrl: normalizeImageUrl(imageUrl),
       artists: artists,
+      releaseDate: releaseDateFromSongJson(json),
       duration:
           durationFromSeconds(json['Duration']) ??
           durationFromMilliseconds(json['timelen']) ??
@@ -542,12 +557,13 @@ class Song {
     final audioId =
         asString(json['audio_id']) ?? asString(json['album_audio_id']);
     final author = asString(json['author_name']) ?? '未知艺人';
+    final rawTitle =
+        asString(json['songname']) ??
+        asString(json['filename']) ??
+        '未知歌曲';
     return Song(
       id: audioId ?? hash,
-      title:
-          asString(json['songname']) ??
-          asString(json['filename']) ??
-          '未知歌曲',
+      title: stripArtistNamePrefix(rawTitle, author),
       artist: author,
       hash: hash,
       albumId: asString(json['album_id']),
@@ -557,6 +573,7 @@ class Song {
         asString(json['album_sizable_cover']),
       ),
       duration: durationFromMilliseconds(json['timelength']),
+      releaseDate: releaseDateFromSongJson(json),
       artists: parseArtists(json, fallbackName: author),
     );
   }
@@ -568,19 +585,29 @@ class Song {
     final authorName = asString(json['author_name']);
     final artists = parseArtists(json, fallbackName: authorName);
     final artistName = artists.map((artist) => artist.name).join(' / ');
+    final resolvedArtist = artistName.isNotEmpty
+        ? artistName
+        : authorName ?? '未知艺人';
+    final rawTitle = asString(json['songname']) ?? '未知歌曲';
     final hash = asString(json['hash']) ?? '';
     return Song(
       id: mixSongId ?? songId ?? hash,
-      title: asString(json['songname']) ?? '未知歌曲',
-      artist: artistName.isNotEmpty ? artistName : authorName ?? '未知艺人',
+      title: stripArtistNamePrefix(rawTitle, resolvedArtist),
+      artist: resolvedArtist,
       hash: hash,
       albumId: asString(json['album_id']),
-      albumAudioId: mixSongId ?? songId,
+      albumAudioId:
+          asString(json['album_audio_id']) ??
+          mixSongId ??
+          songId,
       albumName: asString(json['album_name']),
       coverUrl: normalizeImageUrl(asString(json['sizable_cover'])),
       artists: artists,
       // /top/card 的 time_length 是带小数的秒数（如 259.16）。
-      duration: durationFromTopCardSeconds(json['time_length']),
+      duration: durationFromTopCardSeconds(json['time_length']) ??
+          durationFromSeconds(json['time_length']) ??
+          durationFromMilliseconds(json['timelen']),
+      releaseDate: releaseDateFromSongJson(json),
     );
   }
 
@@ -591,24 +618,34 @@ class Song {
       fallbackName: asString(json['author_name']),
     );
     final artistName = artists.map((artist) => artist.name).join(' / ');
+    final resolvedArtist = artistName.isNotEmpty
+        ? artistName
+        : asString(json['author_name']) ?? '未知艺人';
+    final rawTitle =
+        asString(json['songname']) ?? asString(json['audio_name']) ?? '未知歌曲';
     return Song(
       id: asString(json['mixsongid']) ?? songId ?? asString(json['hash']) ?? '',
-      title:
-          asString(json['songname']) ?? asString(json['audio_name']) ?? '未知歌曲',
-      artist: artistName.isNotEmpty
-          ? artistName
-          : asString(json['author_name']) ?? '未知艺人',
+      title: stripArtistNamePrefix(rawTitle, resolvedArtist),
+      artist: resolvedArtist,
       hash:
           asString(json['hash']) ??
           asString(json['hash_320']) ??
           asString(json['hash_flac']) ??
           '',
       albumId: asString(json['album_id']),
-      albumAudioId: asString(json['mixsongid']) ?? songId,
+      albumAudioId:
+          asString(json['album_audio_id']) ??
+          asString(json['mixsongid']) ??
+          songId,
       albumName: asString(json['album_name']),
       coverUrl: normalizeImageUrl(asString(json['sizable_cover'])),
       artists: artists,
-      duration: durationFromSeconds(json['time_length']),
+      duration:
+          durationFromTopCardSeconds(json['time_length']) ??
+          durationFromSeconds(json['time_length']) ??
+          durationFromMilliseconds(json['timelen']) ??
+          durationFromMilliseconds(json['timelength']),
+      releaseDate: releaseDateFromSongJson(json),
     );
   }
 
@@ -618,30 +655,38 @@ class Song {
     final authorName = asString(json['author_name']);
     final artists = parseArtists(json, fallbackName: authorName);
     final artistName = artists.map((artist) => artist.name).join(' / ');
+    final resolvedArtist = artistName.isNotEmpty
+        ? artistName
+        : authorName ?? '未知艺人';
+    final rawTitle = asString(json['songname']) ?? '未知歌曲';
     final transParam = asMap(json['trans_param']);
     return Song(
       id: songId ?? mixSongId ?? asString(json['hash']) ?? '',
-      title: asString(json['songname']) ?? '未知歌曲',
-      artist: artistName.isNotEmpty ? artistName : authorName ?? '未知艺人',
+      title: stripArtistNamePrefix(rawTitle, resolvedArtist),
+      artist: resolvedArtist,
       hash: asString(json['hash']) ?? '',
       albumId: asString(json['album_id']),
       albumAudioId: mixSongId ?? songId,
       coverUrl: normalizeImageUrl(asString(transParam['union_cover'])),
       artists: artists,
       duration: durationFromSeconds(json['time_length']),
+      releaseDate: releaseDateFromSongJson(json),
     );
   }
 
   factory Song.fromPlaylist(Map<String, dynamic> json) {
     final artists = parseArtists(json);
     final artist = artists.map((artist) => artist.name).join(' / ');
+    final resolvedArtist = artist.isNotEmpty ? artist : '未知艺人';
+    final rawTitle =
+        asString(json['name']) ?? asString(json['audio_name']) ?? '未知歌曲';
     final albumInfo = json['albuminfo'];
     final albumMap = albumInfo is Map<String, dynamic> ? albumInfo : null;
 
     return Song(
       id: asString(json['fileid']) ?? asString(json['hash']) ?? '',
-      title: asString(json['name']) ?? asString(json['audio_name']) ?? '未知歌曲',
-      artist: artist.isNotEmpty ? artist : '未知艺人',
+      title: stripArtistNamePrefix(rawTitle, resolvedArtist),
+      artist: resolvedArtist,
       hash: asString(json['hash']) ?? '',
       albumId: asString(json['album_id']) ?? asString(albumMap?['album_id']),
       albumAudioId:
@@ -657,6 +702,7 @@ class Song {
       ),
       artists: artists,
       duration: durationFromMilliseconds(json['timelen']),
+      releaseDate: releaseDateFromSongJson(json),
     );
   }
 
@@ -673,6 +719,11 @@ class Song {
       artists = [ArtistRef(id: artistId, name: authorName)];
     }
     final artistName = artists.map((artist) => artist.name).join(' / ');
+    final resolvedArtist = artistName.isNotEmpty
+        ? artistName
+        : authorName ?? '未知艺人';
+    final rawTitle =
+        asString(json['audio_name']) ?? asString(json['name']) ?? '未知歌曲';
     final transParam = asMap(json['trans_param']);
 
     return Song(
@@ -681,8 +732,8 @@ class Song {
           asString(json['audio_id']) ??
           asString(json['hash']) ??
           '',
-      title: asString(json['audio_name']) ?? asString(json['name']) ?? '未知歌曲',
-      artist: artistName.isNotEmpty ? artistName : authorName ?? '未知艺人',
+      title: stripArtistNamePrefix(rawTitle, resolvedArtist),
+      artist: resolvedArtist,
       hash: asString(json['hash']) ?? '',
       albumId: asString(json['album_id']),
       albumAudioId: asString(json['album_audio_id']),
@@ -693,6 +744,7 @@ class Song {
             asString(json['cover']),
       ),
       artists: artists,
+      releaseDate: releaseDateFromSongJson(json),
       duration:
           durationFromMilliseconds(json['timelength']) ??
           durationFromMilliseconds(json['timelen']),
@@ -744,6 +796,7 @@ class Song {
             asString(json['imgurl']),
       ),
       artists: artists,
+      releaseDate: releaseDateFromSongJson(json),
       duration:
           durationFromMilliseconds(json['time']) ??
           durationFromMilliseconds(json['320time']) ??
@@ -769,6 +822,10 @@ class Song {
         .where((artist) => artist.name.isNotEmpty)
         .toList();
     final artistName = artists.map((artist) => artist.name).join(' / ');
+    final resolvedArtist = artistName.isNotEmpty
+        ? artistName
+        : asString(base['author_name']) ?? '未知艺人';
+    final rawTitle = asString(base['audio_name']) ?? '未知歌曲';
 
     return Song(
       id:
@@ -776,10 +833,8 @@ class Song {
           asString(base['album_id']) ??
           asString(json['id']) ??
           '',
-      title: asString(base['audio_name']) ?? '未知歌曲',
-      artist: artistName.isNotEmpty
-          ? artistName
-          : asString(base['author_name']) ?? '未知艺人',
+      title: stripArtistNamePrefix(rawTitle, resolvedArtist),
+      artist: resolvedArtist,
       hash: asString(audioInfo['hash']) ?? '',
       albumId: asString(base['album_id']),
       albumAudioId: asString(audioInfo['hash']) ?? asString(json['id']),
@@ -787,6 +842,7 @@ class Song {
       coverUrl: normalizeImageUrl(asString(albumInfo['cover'])),
       artists: artists,
       duration: durationFromMilliseconds(audioInfo['duration']),
+      releaseDate: releaseDateFromSongJson(json),
     );
   }
 
@@ -800,6 +856,8 @@ class Song {
         'albumName': albumName,
         'coverUrl': coverUrl,
         'durationMs': duration?.inMilliseconds,
+        // 发行日期必须持久化：否则重启后从缓存恢复的歌曲会显示「未知」
+        'releaseDate': releaseDate?.toIso8601String(),
         'artists': artists
             .map((a) => {
                   'id': a.id,
@@ -821,6 +879,7 @@ class Song {
       albumName: asString(json['albumName']),
       coverUrl: asString(json['coverUrl']),
       duration: durationFromMilliseconds(json['durationMs']),
+      releaseDate: releaseDateFromSongJson(json),
       artists: asList(json['artists'])
           .whereType<Map<String, dynamic>>()
           .map((a) => ArtistRef(
@@ -1005,20 +1064,26 @@ class _SongDisplayName {
 /// 仅当前缀与已知歌手名一致时才剥离，避免误伤歌名本身含连字符的歌曲。
 /// 多个歌手时兼容「汪峰 / 李荣浩」「汪峰、李荣浩」等分隔写法。
 String stripArtistNamePrefix(String title, String artistName) {
-  if (artistName.isEmpty) {
+  if (artistName.isEmpty || artistName == '未知艺人') {
     return title;
   }
-  final names = artistName.split(' / ').where((name) => name.isNotEmpty);
-  final candidates = [
-    RegExp.escape(artistName),
-    names.map(RegExp.escape).join(r'\s*[/、&_,，–—-]?\s*'),
+  final names = artistName
+      .split(RegExp(r'\s*[/、,，&]\s*'))
+      .map((name) => name.trim())
+      .where((name) => name.isNotEmpty)
+      .toList();
+  final candidates = <String>[
+    RegExp.escape(artistName.trim()),
+    if (names.isNotEmpty)
+      names.map(RegExp.escape).join(r'\s*[/、&_,，–—-]?\s*'),
   ];
   for (final candidate in candidates) {
     final match = RegExp(
       '^$candidate\\s*[-–—]\\s*',
+      caseSensitive: false,
     ).firstMatch(title);
     if (match != null && match.end < title.length) {
-      return title.substring(match.end);
+      return title.substring(match.end).trimLeft();
     }
   }
   return title;
@@ -1838,15 +1903,116 @@ Duration? durationFromMilliseconds(Object? value) {
   return milliseconds == null ? null : Duration(milliseconds: milliseconds);
 }
 
+/// 从歌曲 JSON 里提取发行日期，兼容各接口的不同命名。
+///
+/// 酷狗不同接口的字段名不一致：
+/// - `/search`：`PublishDate`（`2003-07-31`）
+/// - 歌单 / 专辑 / 排行榜：`publish_date`，或在 `albuminfo.publish_time` 里
+/// - 部分接口只有 `publish_time`
+DateTime? releaseDateFromSongJson(Map<String, dynamic> json) {
+  // 直接日期字符串
+  for (final key in const [
+    'PublishDate',
+    'publish_date',
+    'publishDate',
+    'release_date',
+    'releaseDate',
+  ]) {
+    final parsed = releaseDateFromString(json[key]);
+    if (parsed != null) return parsed;
+  }
+
+  // 毫秒 / 秒时间戳
+  for (final key in const ['publish_time', 'publishTime', 'release_time']) {
+    final parsed = releaseDateFromMillis(json[key], allowSeconds: true);
+    if (parsed != null) return parsed;
+  }
+
+  // 专辑信息里可能带日期
+  final albumInfo = json['albuminfo'];
+  if (albumInfo is Map) {
+    final albumDate = releaseDateFromString(albumInfo['publish_time']) ??
+        releaseDateFromMillis(albumInfo['publish_time'], allowSeconds: true) ??
+        releaseDateFromString(albumInfo['publish_date']);
+    if (albumDate != null) return albumDate;
+  }
+
+  return null;
+}
+
+/// 从日期字符串里解析出发行日期（精确到日）。
+///
+/// 兼容酷狗 `PublishDate` 的几种形态：`2003-07-31`、`2003/07/31`、
+/// `2003年07月31日`，以及只给年份的 `2003`。
+/// 解析不出来时返回 null，界面显示「未知」，不用当前日期兜底。
+DateTime? releaseDateFromString(Object? value) {
+  final text = asString(value)?.trim();
+  if (text == null || text.isEmpty) return null;
+
+  // 2003-07-31 / 2003/07/31 / 2003.07.31 / 2003年07月31日
+  final full = RegExp(
+    r'^(\d{4})\s*[-/.年]\s*(\d{1,2})\s*[-/.月]\s*(\d{1,2})',
+  ).firstMatch(text);
+  if (full != null) {
+    final year = int.tryParse(full.group(1)!);
+    final month = int.tryParse(full.group(2)!);
+    final day = int.tryParse(full.group(3)!);
+    if (year != null && month != null && day != null) {
+      final date = DateTime(year, month, day);
+      // 防止 2003-02-31 这种非法日期被 DateTime 自动进位
+      if (date.year == year && date.month == month && date.day == day) {
+        return date;
+      }
+      return null;
+    }
+  }
+
+  // 只有年份
+  final yearOnly = RegExp(r'^(\d{4})$').firstMatch(text);
+  if (yearOnly != null) {
+    final year = int.tryParse(yearOnly.group(1)!);
+    if (year != null && year > 0) return DateTime(year, 1, 1);
+  }
+
+  final parsed = DateTime.tryParse(text);
+  return parsed;
+}
+
+/// 从毫秒时间戳解析发行日期。
+///
+/// 网易云 `publishTime` 是北京时间当天 00:00 的毫秒值
+/// （例如 `1059580800000` = 2003-07-31 00:00 +08:00）。
+/// 这里固定按 UTC+8 换算，否则设备在其它时区（如 UTC）会被算成前一天。
+DateTime? releaseDateFromMillis(Object? value, {bool allowSeconds = false}) {
+  var ms = asInt(value);
+  if (ms == null || ms <= 0) return null;
+  // 有些接口给的是秒级时间戳（10 位），按毫秒处理会跑到 1970 年
+  if (allowSeconds && ms < 100000000000) {
+    ms = ms * 1000;
+  }
+  const beijingOffset = Duration(hours: 8);
+  final beijing = DateTime.fromMillisecondsSinceEpoch(
+    ms,
+    isUtc: true,
+  ).add(beijingOffset);
+  return DateTime(beijing.year, beijing.month, beijing.day);
+}
+
 String? normalizeImageUrl(String? url, {int size = 480}) {
   if (url == null) {
     return null;
   }
-  return url
+  var normalized = url
       .replaceAll('{size}', '$size')
       .replaceAll('{SIZE}', '$size')
       .replaceAll('/{size}/', '/$size/')
       .replaceAll('/{SIZE}/', '/$size/');
+  // 网易云图片 CDN 是 http 直链，iOS 的 ATS 会直接拦掉，统一升级为 https。
+  if (normalized.startsWith('http://') &&
+      normalized.contains('music.126.net')) {
+    normalized = 'https://${normalized.substring(7)}';
+  }
+  return normalized;
 }
 
 String formatDuration(Duration? duration) {
@@ -2006,6 +2172,7 @@ class NetEaseSong {
     required this.artists,
     required this.album,
     required this.duration,
+    this.publishTime,
   });
 
   final int id;
@@ -2013,6 +2180,11 @@ class NetEaseSong {
   final List<NetEaseArtist> artists;
   final NetEaseAlbum album;
   final Duration duration;
+
+  /// 发行时间（毫秒时间戳）。
+  ///
+  /// 网易云把它放在歌曲层 `publishTime`，不在 `al` 里（`al.publishTime` 恒为空）。
+  final int? publishTime;
 
   /// 转换为 [Song]，标记来源为网易云。
   Song toSong() {
@@ -2025,8 +2197,9 @@ class NetEaseSong {
       albumId: '${album.id}',
       albumAudioId: '$id',
       albumName: album.name,
-      coverUrl: album.picUrl,
+      coverUrl: normalizeImageUrl(album.picUrl),
       duration: duration,
+      releaseDate: releaseDateFromMillis(publishTime),
       artists: artists
           .map((a) => ArtistRef(id: '${a.id}', name: a.name))
           .where((a) => a.name.isNotEmpty)
@@ -2046,6 +2219,7 @@ class NetEaseSong {
           .toList(),
       album: NetEaseAlbum.fromJson(asMap(json['al'])),
       duration: durationFromMilliseconds(json['dt']) ?? Duration.zero,
+      publishTime: asInt(json['publishTime']),
     );
   }
 }
@@ -2186,14 +2360,23 @@ class BusiVipInfo {
 
   factory BusiVipInfo.fromJson(Map<String, dynamic> json) {
     return BusiVipInfo(
-      isVip: (asInt(json['is_vip']) ?? 0) == 1,
-      productType: asString(json['product_type']),
-      busiType: asString(json['busi_type']),
-      vipBeginTime: asString(json['vip_begin_time']),
-      vipEndTime: asString(json['vip_end_time']),
-      vipClearday: asString(json['vip_clearday']),
+      isVip: (asInt(json['is_vip']) ?? 0) == 1 || json['isVip'] == true,
+      productType: asString(json['product_type'] ?? json['productType']),
+      busiType: asString(json['busi_type'] ?? json['busiType']),
+      vipBeginTime: asString(json['vip_begin_time'] ?? json['vipBeginTime']),
+      vipEndTime: asString(json['vip_end_time'] ?? json['vipEndTime']),
+      vipClearday: asString(json['vip_clearday'] ?? json['vipClearday']),
     );
   }
+
+  Map<String, dynamic> toCache() => {
+        'is_vip': isVip ? 1 : 0,
+        'product_type': productType,
+        'busi_type': busiType,
+        'vip_begin_time': vipBeginTime,
+        'vip_end_time': vipEndTime,
+        'vip_clearday': vipClearday,
+      };
 }
 
 /// 当前登录用户 VIP 信息（/user/vip/detail）。
@@ -2214,21 +2397,70 @@ class UserVipInfo {
   final bool isSuperVip;
   final bool isConceptVip;
 
-  bool get isVipActive => isVip == 1;
+  bool get hasActiveConceptVip =>
+      isConceptVip ||
+      busiVip.any((b) => b.isVip && b.busiType == 'concept');
+
+  bool get hasActiveSuperVip =>
+      isSuperVip ||
+      busiVip.any((b) => b.isVip && b.productType == 'svip');
+
+  bool get hasActiveVip =>
+      isVip == 1 ||
+      hasActiveConceptVip ||
+      hasActiveSuperVip ||
+      busiVip.any((b) => b.isVip);
+
+  bool get isVipActive => hasActiveVip;
+
+  String get displayLabel {
+    if (hasActiveSuperVip) return '豪华VIP';
+    if (hasActiveConceptVip) return '概念版VIP';
+    if (hasActiveVip) return '畅听VIP';
+    return '暂未开通 VIP';
+  }
+
+  String? get primaryEndTime {
+    for (final item in busiVip) {
+      if (item.isVip &&
+          item.busiType == 'concept' &&
+          item.vipEndTime != null &&
+          item.vipEndTime!.isNotEmpty) {
+        return item.vipEndTime;
+      }
+    }
+    for (final item in busiVip) {
+      if (item.isVip &&
+          item.vipEndTime != null &&
+          item.vipEndTime!.isNotEmpty) {
+        return item.vipEndTime;
+      }
+    }
+    return null;
+  }
 
   factory UserVipInfo.fromJson(Map<String, dynamic> json) {
     return UserVipInfo(
-      userId: asString(json['userid']),
-      isVip: asInt(json['is_vip']) ?? 0,
-      vipType: asInt(json['vip_type']),
-      busiVip: asList(json['busi_vip'])
-          .whereType<Map<String, dynamic>>()
-          .map(BusiVipInfo.fromJson)
+      userId: asString(json['userid'] ?? json['userId']),
+      isVip: asInt(json['is_vip'] ?? json['isVip']) ?? 0,
+      vipType: asInt(json['vip_type'] ?? json['vipType']),
+      busiVip: asList(json['busi_vip'] ?? json['busiVip'])
+          .whereType<Map>()
+          .map((item) => BusiVipInfo.fromJson(asMap(item)))
           .toList(),
       isSuperVip: json['isSuperVip'] == true,
       isConceptVip: json['isConceptVip'] == true,
     );
   }
+
+  Map<String, dynamic> toCache() => {
+        'userid': userId,
+        'is_vip': isVip,
+        'vip_type': vipType,
+        'busi_vip': busiVip.map((e) => e.toCache()).toList(),
+        'isSuperVip': isSuperVip,
+        'isConceptVip': isConceptVip,
+      };
 }
 
 /// 歌曲高潮片段信息（/song/climax）。

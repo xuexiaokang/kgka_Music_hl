@@ -46,6 +46,13 @@
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
+            <!-- AI / Deep Link URL Scheme (kgka://) -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="kgka" />
+            </intent-filter>
         </activity>
         <!-- 全原生车机全屏播放器（HWUI，覆盖 FlutterActivity 使其停帧，对齐酷我渲染路径） -->
         <activity

@@ -99,11 +99,16 @@ class _AppShellState extends State<AppShell>
   }
 
   Widget _buildPlayerOverlay() {
+    // 手表等极小屏上左缘手势条按比例收窄，否则 60dp 会吞掉近 1/3 屏宽的
+    // 触摸事件，导致播放页中部竖滑失效（内容看着"滑不动"）。
+    final isWatch = AdaptiveLayout.isWatch(context);
     // 左缘手势条起点：TopBar（SafeArea + 8 padding + 48 按钮）之下，
     // 避免 opaque 条遮挡播放页左上角返回按钮。
-    final topBarBottom = MediaQuery.paddingOf(context).top + 64;
+    final topBarBottom =
+        MediaQuery.paddingOf(context).top + (isWatch ? 40 : 64);
     // 底部留出控制按钮与歌词缩放按钮区域，避免 opaque 条遮挡点击。
-    final bottomControlsHeight = MediaQuery.paddingOf(context).bottom + 96;
+    final bottomControlsHeight =
+        MediaQuery.paddingOf(context).bottom + (isWatch ? 48 : 96);
     return Stack(
       children: [
         SlideTransition(
@@ -137,7 +142,7 @@ class _AppShellState extends State<AppShell>
           left: 0,
           top: topBarBottom,
           bottom: bottomControlsHeight,
-          width: 60,
+          width: isWatch ? 24 : 60,
           child: GestureDetector(
             behavior: HitTestBehavior.opaque,
             onHorizontalDragStart: (details) {
@@ -204,7 +209,7 @@ class _AppShellState extends State<AppShell>
       final baseTextScaler = MediaQuery.textScalerOf(context);
       final scaledTextScaler = _RelativeTextScaler(
         base: baseTextScaler,
-        multiplier: ThemeController.carModeFontScaleFactor,
+        multiplier: widget.theme.carModeScale,
       );
       return _wrapPlayerOverlay(MediaQuery(
         data: MediaQuery.of(context).copyWith(textScaler: scaledTextScaler),
@@ -751,55 +756,69 @@ class _LiquidGlassBottomBar extends StatelessWidget {
           ),
           child: ClipRRect(
             borderRadius: BorderRadius.circular(100),
-            child: BackdropFilter(
-              filter: ImageFilter.blur(sigmaX: 28, sigmaY: 28),
-              child: DecoratedBox(
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(100),
-                  // iOS 26 极透微光物理透镜折射渐变
-                  gradient: LinearGradient(
-                    begin: Alignment.topCenter,
-                    end: Alignment.bottomCenter,
-                    colors: isDark
-                        ? [
-                            const Color(0xFF1E2433).withValues(alpha: .52),
-                            const Color(0xFF10141D).withValues(alpha: .36),
-                          ]
-                        : [
-                            Colors.white.withValues(alpha: .52),
-                            Colors.white.withValues(alpha: .26),
-                          ],
+            child: Builder(
+              builder: (context) {
+                final isLiquid = ThemeController.instance.liquidGlassEnabled;
+                final body = DecoratedBox(
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(100),
+                    gradient: isLiquid
+                        ? LinearGradient(
+                            begin: Alignment.topCenter,
+                            end: Alignment.bottomCenter,
+                            colors: isDark
+                                ? [
+                                    const Color(0xFF1E2433).withValues(alpha: .52),
+                                    const Color(0xFF10141D).withValues(alpha: .36),
+                                  ]
+                                : [
+                                    Colors.white.withValues(alpha: .52),
+                                    Colors.white.withValues(alpha: .26),
+                                  ],
+                          )
+                        : null,
+                    color: isLiquid ? null : (isDark ? const Color(0xFF181D28) : Colors.white),
+                    border: Border.all(
+                      color: isDark
+                          ? Colors.white.withValues(alpha: .22)
+                          : (isLiquid
+                              ? Colors.white.withValues(alpha: .92)
+                              : Colors.black.withValues(alpha: .08)),
+                      width: 1.1,
+                    ),
                   ),
-                  border: Border.all(
-                    color: isDark
-                        ? Colors.white.withValues(alpha: .22)
-                        : Colors.white.withValues(alpha: .92),
-                    width: 1.1,
+                  child: Row(
+                    children: [
+                      _LiquidNavItem(
+                        icon: Icons.home_outlined,
+                        activeIcon: Icons.home_rounded,
+                        label: '首页',
+                        isSelected: currentIndex == 0,
+                        onTap: () => onTap(0),
+                      ),
+                      _CenterPlayerDisc(
+                        player: player,
+                        onOpenPlayer: onOpenPlayer,
+                      ),
+                      _LiquidNavItem(
+                        icon: Icons.person_outline_rounded,
+                        activeIcon: Icons.person_rounded,
+                        label: '我的',
+                        isSelected: currentIndex == 1,
+                        onTap: () => onTap(1),
+                      ),
+                    ],
                   ),
-                ),
-                child: Row(
-                  children: [
-                    _LiquidNavItem(
-                      icon: Icons.home_outlined,
-                      activeIcon: Icons.home_rounded,
-                      label: '首页',
-                      isSelected: currentIndex == 0,
-                      onTap: () => onTap(0),
-                    ),
-                    _CenterPlayerDisc(
-                      player: player,
-                      onOpenPlayer: onOpenPlayer,
-                    ),
-                    _LiquidNavItem(
-                      icon: Icons.person_outline_rounded,
-                      activeIcon: Icons.person_rounded,
-                      label: '我的',
-                      isSelected: currentIndex == 1,
-                      onTap: () => onTap(1),
-                    ),
-                  ],
-                ),
-              ),
+                );
+
+                if (isLiquid) {
+                  return BackdropFilter(
+                    filter: ImageFilter.blur(sigmaX: 28, sigmaY: 28),
+                    child: body,
+                  );
+                }
+                return body;
+              },
             ),
           ),
         ),

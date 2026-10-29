@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../design_tokens.dart';
 import '../../controllers/auth_controller.dart';
 import '../../controllers/player_controller.dart';
+import '../../controllers/theme_controller.dart';
 import '../../models/music_models.dart';
 import 'artwork.dart';
 import 'marquee_text.dart';
@@ -23,8 +24,9 @@ class CarLeftPlayerPanel extends StatelessWidget {
   Widget build(BuildContext context) {
     final size = MediaQuery.sizeOf(context);
     final isSmallScreen = size.width < 960;
-    final panelWidth = isSmallScreen ? 320.0 : 380.0;
-    final panelPadding = isSmallScreen ? 14.0 : 20.0;
+    final scaleRatio = (ThemeController.instance.carModeScale / 1.15).clamp(0.7, 1.5);
+    final panelWidth = (isSmallScreen ? 320.0 : 380.0) * scaleRatio;
+    final panelPadding = (isSmallScreen ? 14.0 : 20.0) * scaleRatio;
 
     if (size.height < 150) {
       return SizedBox(width: panelWidth);

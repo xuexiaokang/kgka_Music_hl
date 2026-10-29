@@ -103,10 +103,12 @@ class DownloadController extends ChangeNotifier {
   static const _downloadsIndexKey = 'ka_music_downloads_index';
   static const _playCacheIndexKey = 'ka_music_play_cache_index';
   static const _playCacheLimitKey = 'settings.play_cache_limit';
+  static const _playbackFileCheckTimeout = Duration(milliseconds: 400);
 
   final Map<String, DownloadEntry> _downloads = {}; // key = hash
   final Map<String, PlayCacheEntry> _playCache = {}; // key = hash_quality
-  bool _initialized = false;
+  Future<void>? _initializationFuture;
+  final Completer<void> _downloadIndexReady = Completer<void>();
 
   int _playCacheLimit = 300 * 1024 * 1024; // 默认 300MB
   int get playCacheLimit => _playCacheLimit;
@@ -120,15 +122,36 @@ class DownloadController extends ChangeNotifier {
   }
 
   /// 启动时加载索引并校验文件存在性。
-  Future<void> initialize() async {
-    if (_initialized) return;
-    _initialized = true;
-    final prefs = await SharedPreferences.getInstance();
-    _playCacheLimit = prefs.getInt(_playCacheLimitKey) ?? (300 * 1024 * 1024);
-    await _loadDownloads();
-    await _loadPlayCache();
-    // 启动时 LRU 清理播放缓存
-    await _prunePlayCache(excludePaths: const {});
+  Future<void> initialize() {
+    return _initializationFuture ??= _initialize();
+  }
+
+  Future<void> _initialize() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      _playCacheLimit = prefs.getInt(_playCacheLimitKey) ?? (300 * 1024 * 1024);
+      await _loadDownloads();
+    } catch (error) {
+      debugPrint('[KA Music] Failed to restore download index: $error');
+    } finally {
+      if (!_downloadIndexReady.isCompleted) {
+        _downloadIndexReady.complete();
+      }
+    }
+
+    // 下载索引已经可供播放查询后，再在后台校验磁盘文件。部分旧版本保存的
+    // 沙盒路径在覆盖安装后可能变成慢 I/O；它不能继续阻塞点歌或下一曲。
+    unawaited(_validateRestoredDownloads());
+
+    // 播放只需等用户主动下载索引恢复；播放缓存索引和 LRU
+    // 清理失败都不应该阻断选歌、下一曲或网络播放。
+    try {
+      await _loadPlayCache();
+      await _prunePlayCache(excludePaths: const {});
+    } catch (error) {
+      debugPrint('[KA Music] Failed to restore play cache: $error');
+    }
+    notifyListeners();
   }
 
   Future<void> _loadDownloads() async {
@@ -145,10 +168,8 @@ class DownloadController extends ChangeNotifier {
         final quality = AudioQuality.fromApiValue(item['quality'] as String?);
         final filePath = item['filePath'] as String?;
         if (filePath == null) continue;
-        // 校验文件存在性
-        if (!await _service.fileSize(filePath).then((s) => s > 0)) continue;
         final downloadedAtStr = item['downloadedAt'] as String?;
-        _downloads[song.hash] = DownloadEntry(
+        _downloads[_downloadKey(song)] = DownloadEntry(
           song: song,
           quality: quality,
           status: DownloadStatus.downloaded,
@@ -159,6 +180,24 @@ class DownloadController extends ChangeNotifier {
         );
       }
     } catch (_) {}
+  }
+
+  Future<void> _validateRestoredDownloads() async {
+    var changed = false;
+    for (final entry in _downloads.entries.toList()) {
+      final filePath = entry.value.filePath;
+      if (filePath == null) continue;
+      final size = await _fileSizeForPlayback(filePath);
+      // 超时或文件系统异常时保留索引，下次播放仍可重新校验；只有明确确认
+      // 文件不存在时才移除下载标记。
+      if (size == 0) {
+        _downloads.remove(entry.key);
+        changed = true;
+      }
+    }
+    if (!changed) return;
+    notifyListeners();
+    await _persistDownloads();
   }
 
   Future<void> _loadPlayCache() async {
@@ -198,12 +237,14 @@ class DownloadController extends ChangeNotifier {
     final prefs = await SharedPreferences.getInstance();
     final list = _downloads.values
         .where((e) => e.status == DownloadStatus.downloaded)
-        .map((e) => {
-              'song': e.song.toCache(),
-              'quality': e.quality.apiValue,
-              'filePath': e.filePath,
-              'downloadedAt': e.downloadedAt?.toIso8601String(),
-            })
+        .map(
+          (e) => {
+            'song': e.song.toCache(),
+            'quality': e.quality.apiValue,
+            'filePath': e.filePath,
+            'downloadedAt': e.downloadedAt?.toIso8601String(),
+          },
+        )
         .toList();
     await prefs.setString(_downloadsIndexKey, jsonEncode(list));
   }
@@ -211,50 +252,98 @@ class DownloadController extends ChangeNotifier {
   Future<void> _persistPlayCache() async {
     final prefs = await SharedPreferences.getInstance();
     final list = _playCache.values
-        .map((e) => {
-              'cacheKey': e.cacheKey,
-              'song': e.song.toCache(),
-              'quality': e.quality.apiValue,
-              'filePath': e.filePath,
-              'size': e.size,
-              'cachedAt': e.cachedAt.toIso8601String(),
-            })
+        .map(
+          (e) => {
+            'cacheKey': e.cacheKey,
+            'song': e.song.toCache(),
+            'quality': e.quality.apiValue,
+            'filePath': e.filePath,
+            'size': e.size,
+            'cachedAt': e.cachedAt.toIso8601String(),
+          },
+        )
         .toList();
     await prefs.setString(_playCacheIndexKey, jsonEncode(list));
   }
 
   // ===== 查询 =====
 
-  /// 返回本地文件路径：优先已下载 > 播放缓存（按当前音质）。无则 null。
-  String? localPathFor(Song song, AudioQuality quality) {
-    final key = _service.cacheKeyFor(song, quality);
-    // 优先已下载（同音质）
-    final download = _downloads[song.hash];
-    if (download?.status == DownloadStatus.downloaded &&
-        download?.filePath != null &&
-        _service.cacheKeyFor(download!.song, download.quality) == key) {
-      return download.filePath;
+  String _downloadKey(Song song) => song.hash.trim().toLowerCase();
+
+  /// 返回可播放的本地文件路径。
+  ///
+  /// 用户主动下载的文件不受当前音质设置限制，始终优先于网络地址；播放缓存
+  /// 仍按当前音质匹配。查询前会等待启动索引恢复，并再次校验文件仍然存在。
+  Future<String?> localPathFor(Song song, AudioQuality quality) async {
+    unawaited(initialize());
+    if (!_downloadIndexReady.isCompleted) {
+      try {
+        await _downloadIndexReady.future.timeout(_playbackFileCheckTimeout);
+      } on TimeoutException {
+        debugPrint(
+          '[KA Music][playback] download-index timeout; use network source',
+        );
+        return null;
+      }
     }
-    // 其次播放缓存
+    final key = _service.cacheKeyFor(song, quality);
+    // 手动下载优先：即使当前切换了音质，也直接播放已有的完整本地文件。
+    final downloadKey = _downloadKey(song);
+    final download = _downloads[downloadKey];
+    if (download?.status == DownloadStatus.downloaded &&
+        download?.filePath != null) {
+      final size = await _fileSizeForPlayback(download!.filePath!);
+      if (size != null && size > 0) {
+        return download.filePath;
+      }
+      if (size == null) return null;
+      _downloads.remove(downloadKey);
+      notifyListeners();
+      await _persistDownloads();
+    }
+    // 其次使用与当前音质一致的播放缓存。
     final cache = _playCache[key];
     if (cache != null) {
-      return cache.filePath;
+      final size = await _fileSizeForPlayback(cache.filePath);
+      if (size != null && size > 0) {
+        return cache.filePath;
+      }
+      if (size == null) return null;
+      _playCache.remove(key);
+      notifyListeners();
+      await _persistPlayCache();
     }
     return null;
   }
 
-  bool isDownloaded(Song song) =>
-      _downloads[song.hash]?.status == DownloadStatus.downloaded;
+  Future<int?> _fileSizeForPlayback(String path) async {
+    try {
+      return await _service.fileSize(path).timeout(_playbackFileCheckTimeout);
+    } on TimeoutException {
+      debugPrint(
+        '[KA Music][playback] local-file check timeout; use network source',
+      );
+      return null;
+    } catch (error) {
+      debugPrint(
+        '[KA Music][playback] local-file check failed; use network source: '
+        '$error',
+      );
+      return null;
+    }
+  }
 
-  DownloadEntry? entryFor(Song song) => _downloads[song.hash];
+  bool isDownloaded(Song song) =>
+      _downloads[_downloadKey(song)]?.status == DownloadStatus.downloaded;
+
+  DownloadEntry? entryFor(Song song) => _downloads[_downloadKey(song)];
 
   List<Song> get downloadedSongs => _downloads.values
       .where((e) => e.status == DownloadStatus.downloaded)
       .map((e) => e.song)
       .toList();
 
-  List<DownloadEntry> get downloadEntries =>
-      _downloads.values.toList();
+  List<DownloadEntry> get downloadEntries => _downloads.values.toList();
 
   List<PlayCacheEntry> get playCacheEntries => _playCache.values.toList();
 
@@ -268,12 +357,12 @@ class DownloadController extends ChangeNotifier {
 
   /// 用户主动下载歌曲。
   Future<void> download(Song song, AudioQuality quality) async {
-    final hash = song.hash;
-    final existing = _downloads[hash];
+    final key = _downloadKey(song);
+    final existing = _downloads[key];
     if (existing?.status == DownloadStatus.downloading) return;
     if (existing?.status == DownloadStatus.downloaded) return;
 
-    _downloads[hash] = DownloadEntry(
+    _downloads[key] = DownloadEntry(
       song: song,
       quality: quality,
       status: DownloadStatus.downloading,
@@ -288,7 +377,7 @@ class DownloadController extends ChangeNotifier {
       }
       await _transfer(song, quality, playUrl.url);
     } catch (error) {
-      _downloads[hash] = DownloadEntry(
+      _downloads[key] = DownloadEntry(
         song: song,
         quality: quality,
         status: DownloadStatus.failed,
@@ -318,15 +407,15 @@ class DownloadController extends ChangeNotifier {
     Future<void> worker() async {
       while (cursor < songs.length) {
         final song = songs[cursor++];
-        final hash = song.hash;
-        final existing = _downloads[hash];
+        final key = _downloadKey(song);
+        final existing = _downloads[key];
         if (existing?.status == DownloadStatus.downloading ||
             existing?.status == DownloadStatus.downloaded) {
           skipped++;
           continue;
         }
 
-        _downloads[hash] = DownloadEntry(
+        _downloads[key] = DownloadEntry(
           song: song,
           quality: quality,
           status: DownloadStatus.downloading,
@@ -337,7 +426,7 @@ class DownloadController extends ChangeNotifier {
         try {
           final playUrl = await _api.songUrl(song, quality: quality);
           if (playUrl.url.isEmpty) {
-            _downloads[hash] = DownloadEntry(
+            _downloads[key] = DownloadEntry(
               song: song,
               quality: quality,
               status: DownloadStatus.failed,
@@ -350,7 +439,7 @@ class DownloadController extends ChangeNotifier {
           enqueued++;
           unawaited(_transfer(song, quality, playUrl.url));
         } catch (error) {
-          _downloads[hash] = DownloadEntry(
+          _downloads[key] = DownloadEntry(
             song: song,
             quality: quality,
             status: DownloadStatus.failed,
@@ -365,9 +454,7 @@ class DownloadController extends ChangeNotifier {
     final workerCount = songs.length < urlConcurrency
         ? songs.length
         : urlConcurrency;
-    await Future.wait(
-      [for (var i = 0; i < workerCount; i++) worker()],
-    );
+    await Future.wait([for (var i = 0; i < workerCount; i++) worker()]);
     return BatchDownloadResult(
       enqueued: enqueued,
       skipped: skipped,
@@ -377,7 +464,7 @@ class DownloadController extends ChangeNotifier {
 
   /// 文件传输（播放地址已解析）。成功后写入已下载索引，失败进入失败列表。
   Future<void> _transfer(Song song, AudioQuality quality, String url) async {
-    final hash = song.hash;
+    final key = _downloadKey(song);
     try {
       final path = await _service.download(
         song: song,
@@ -385,14 +472,14 @@ class DownloadController extends ChangeNotifier {
         url: url,
         onProgress: (received, total) {
           final progress = total > 0 ? received / total : 0.0;
-          final entry = _downloads[hash];
+          final entry = _downloads[key];
           if (entry?.status == DownloadStatus.downloading) {
-            _downloads[hash] = entry!.copyWith(progress: progress);
+            _downloads[key] = entry!.copyWith(progress: progress);
             notifyListeners();
           }
         },
       );
-      _downloads[hash] = DownloadEntry(
+      _downloads[key] = DownloadEntry(
         song: song,
         quality: quality,
         status: DownloadStatus.downloaded,
@@ -403,7 +490,7 @@ class DownloadController extends ChangeNotifier {
       notifyListeners();
       await _persistDownloads();
     } catch (error) {
-      _downloads[hash] = DownloadEntry(
+      _downloads[key] = DownloadEntry(
         song: song,
         quality: quality,
         status: DownloadStatus.failed,
@@ -415,31 +502,32 @@ class DownloadController extends ChangeNotifier {
 
   /// 移除一条失败记录（从失败列表清除）。
   void removeFailed(Song song) {
-    final entry = _downloads[song.hash];
+    final key = _downloadKey(song);
+    final entry = _downloads[key];
     if (entry?.status != DownloadStatus.failed) return;
-    _downloads.remove(song.hash);
+    _downloads.remove(key);
     notifyListeners();
   }
 
   /// 取消下载。
   Future<void> cancelDownload(Song song) async {
-    final hash = song.hash;
-    final entry = _downloads[hash];
+    final downloadKey = _downloadKey(song);
+    final entry = _downloads[downloadKey];
     if (entry?.status != DownloadStatus.downloading) return;
-    final key = _service.cacheKeyFor(song, entry!.quality);
-    await _service.cancel(key);
-    _downloads.remove(hash);
+    final transferKey = _service.cacheKeyFor(song, entry!.quality);
+    await _service.cancel(transferKey);
+    _downloads.remove(downloadKey);
     notifyListeners();
   }
 
   /// 删除单个已下载歌曲。
   Future<void> deleteDownload(Song song) async {
-    final hash = song.hash;
-    final entry = _downloads[hash];
+    final key = _downloadKey(song);
+    final entry = _downloads[key];
     if (entry?.filePath != null) {
       await _service.deleteFile(entry!.filePath!);
     }
-    _downloads.remove(hash);
+    _downloads.remove(key);
     notifyListeners();
     await _persistDownloads();
   }
@@ -458,16 +546,43 @@ class DownloadController extends ChangeNotifier {
 
   // ===== 播放缓存 =====
 
-  /// 后台缓存当前播放歌曲（首播后调用）。url 来自 songUrl 结果。
+  String? _activePlayCacheKey;
+
+  /// 取消当前正在进行的后台播放缓存传输（切歌时调用，避免快速切歌浪费流量）。
+  Future<void> cancelActivePlayCache() async {
+    final activeKey = _activePlayCacheKey;
+    if (activeKey == null) return;
+    _activePlayCacheKey = null;
+    final isManualDownload = _downloads.values.any(
+      (entry) =>
+          entry.status == DownloadStatus.downloading &&
+          _service.cacheKeyFor(entry.song, entry.quality) == activeKey,
+    );
+    if (!isManualDownload) {
+      await _service.cancel(activeKey);
+    }
+  }
+
+  /// 后台缓存当前播放歌曲（稳定播放后调用）。url 来自 songUrl 结果。
   Future<void> cacheForPlayback(
     Song song,
     AudioQuality quality,
     String url,
   ) async {
+    if (_playCacheLimit <= 0) return;
     final key = _service.cacheKeyFor(song, quality);
-    // 已有缓存或已在下载则跳过
+    // 已有缓存或已下载/正在下载则跳过
     if (_playCache[key] != null) return;
-    if (_downloads[song.hash]?.status == DownloadStatus.downloading) return;
+    final downloadStatus = _downloads[_downloadKey(song)]?.status;
+    if (downloadStatus == DownloadStatus.downloading ||
+        downloadStatus == DownloadStatus.downloaded) {
+      return;
+    }
+
+    if (_activePlayCacheKey != null && _activePlayCacheKey != key) {
+      await cancelActivePlayCache();
+    }
+    _activePlayCacheKey = key;
 
     try {
       final path = await _service.cacheForPlayback(
@@ -476,6 +591,7 @@ class DownloadController extends ChangeNotifier {
         url: url,
       );
       final size = await _service.fileSize(path);
+      if (size <= 0) return;
       _playCache[key] = PlayCacheEntry(
         cacheKey: key,
         song: song,
@@ -490,6 +606,10 @@ class DownloadController extends ChangeNotifier {
       await _prunePlayCache(excludePaths: {path});
     } catch (_) {
       // 播放缓存失败静默忽略
+    } finally {
+      if (_activePlayCacheKey == key) {
+        _activePlayCacheKey = null;
+      }
     }
   }
 
@@ -514,14 +634,17 @@ class DownloadController extends ChangeNotifier {
   }
 
   Future<void> _prunePlayCache({Set<String> excludePaths = const {}}) async {
-    final entries = _playCache.values
-        .map((e) => (
-              cacheKey: e.cacheKey,
-              filePath: e.filePath,
-              cachedAt: e.cachedAt,
-            ))
-        .toList()
-      ..sort((a, b) => a.cachedAt.compareTo(b.cachedAt));
+    final entries =
+        _playCache.values
+            .map(
+              (e) => (
+                cacheKey: e.cacheKey,
+                filePath: e.filePath,
+                cachedAt: e.cachedAt,
+              ),
+            )
+            .toList()
+          ..sort((a, b) => a.cachedAt.compareTo(b.cachedAt));
 
     await _service.prunePlayCache(
       entries,
@@ -544,5 +667,20 @@ class DownloadController extends ChangeNotifier {
       notifyListeners();
       await _persistPlayCache();
     }
+  }
+
+  /// 获取当前实际生效的下载目录绝对路径。
+  Future<String> getDownloadDirPath() async {
+    final dir = await _service.downloadDir();
+    return dir.path;
+  }
+
+  /// 获取用户自定义的下载目录（若未配置返回 null）。
+  Future<String?> getCustomDownloadDir() => _service.getCustomDownloadDir();
+
+  /// 设置或清除用户自定义下载目录。
+  Future<void> setCustomDownloadDir(String? path) async {
+    await _service.setCustomDownloadDir(path);
+    notifyListeners();
   }
 }

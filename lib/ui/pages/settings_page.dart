@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:file_picker/file_picker.dart';
 import '../widgets/liquid_glass_ui.dart';
 import '../design_tokens.dart';
 import '../widgets/status_bar_overlay.dart';
@@ -16,6 +17,7 @@ import '../widgets/audio_effects_sheet.dart';
 import '../widgets/audio_quality_sheet.dart';
 import '../widgets/toast.dart';
 import 'about_page.dart';
+import 'log_viewer_page.dart';
 import 'audio_interruption_settings_page.dart';
 import 'desktop_lyrics_settings_page.dart';
 import 'personalization_settings_page.dart';
@@ -48,6 +50,58 @@ class SettingsPage extends StatelessWidget {
     if (scale >= 1.2) return '特大';
     if (scale >= 1.1) return '大';
     return '标准';
+  }
+
+  Future<void> _selectCarModeScale(BuildContext context, ThemeController theme) async {
+    final scaleLabels = <double, String>{
+      0.85: '0.85x（紧凑 / 较低 DPI）',
+      1.0: '1.0x（标准）',
+      1.15: '1.15x（适度放大 / 默认推荐）',
+      1.3: '1.3x（大号 / 宽屏）',
+      1.5: '1.5x（特大 / 远视距）',
+    };
+
+    final selected = await showModalBottomSheet<double>(
+      context: context,
+      showDragHandle: true,
+      backgroundColor: Theme.of(context).colorScheme.surface,
+      builder: (sheetContext) {
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  '车机界面缩放',
+                  style: Theme.of(sheetContext).textTheme.titleLarge?.copyWith(
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                for (final scale in ThemeController.carModeScaleOptions) ...[
+                  ListTile(
+                    title: Text(scaleLabels[scale] ?? '${scale}x'),
+                    trailing: theme.carModeScale == scale
+                        ? Icon(
+                            Icons.check_rounded,
+                            color: Theme.of(sheetContext).colorScheme.primary,
+                          )
+                        : null,
+                    onTap: () => Navigator.of(sheetContext).pop(scale),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        );
+      },
+    );
+
+    if (selected != null) {
+      await theme.setCarModeScale(selected);
+    }
   }
 
   Future<void> _selectFontScale(BuildContext context, ThemeController theme) async {
@@ -185,6 +239,7 @@ class SettingsPage extends StatelessWidget {
           body: AnimatedBuilder(
             animation: Listenable.merge([
               auth,
+              auth.vipClaim,
               player,
               ?localMusic,
               theme,
@@ -213,8 +268,22 @@ class SettingsPage extends StatelessWidget {
                       icon: Icons.workspace_premium_rounded,
                       iconColor: const Color(0xFFE8A33D),
                       title: '我的 VIP',
-                      subtitle: 'VIP 状态与每日福利',
+                      subtitle: auth.vipInfo?.hasActiveVip == true
+                          ? '${auth.vipInfo!.displayLabel}${auth.vipInfo!.primaryEndTime != null ? ' · ${auth.vipInfo!.primaryEndTime} 到期' : ''}'
+                          : 'VIP 状态与每日福利',
                       onTap: () => _openVipInfo(context),
+                    ),
+                    _SettingsDivider(),
+                    _SettingsSwitchTile(
+                      icon: Icons.card_giftcard_rounded,
+                      iconColor: const Color(0xFFE8A33D),
+                      title: '自动签到领取 VIP',
+                      subtitle: auth.vipClaim.lastMessage ?? '每日打开应用自动签到并升级概念版 VIP',
+                      value: auth.vipClaim.autoEnabled,
+                      onChanged: (enabled) => auth.vipClaim.setAutoEnabled(
+                        enabled,
+                        session: auth.session,
+                      ),
                     ),
                     _SettingsDivider(),
                     _SettingsTile(
@@ -287,6 +356,17 @@ class SettingsPage extends StatelessWidget {
                         value: player.bluetoothLyricsEnabled,
                         onChanged: player.setBluetoothLyricsEnabled,
                       ),
+                      if (player.bluetoothLyricsEnabled) ...[
+                        _SettingsDivider(),
+                        _SettingsSwitchTile(
+                          icon: Icons.watch_rounded,
+                          iconColor: colorScheme.primary,
+                          title: '手环 / AVRCP 歌词同步',
+                          subtitle: '将实时歌词同步为媒体标题，供手环、手表与车机仪表盘显示',
+                          value: player.bluetoothLyricsTitleSyncEnabled,
+                          onChanged: player.setBluetoothLyricsTitleSyncEnabled,
+                        ),
+                      ],
                     ],
                     _SettingsDivider(),
                     _SettingsSwitchTile(
@@ -375,6 +455,15 @@ class SettingsPage extends StatelessWidget {
                       subtitle: '全屏歌词非当前行呈现景深模糊效果（默认关闭，若卡顿建议关闭）',
                       value: player.lyricBlurEnabled,
                       onChanged: player.setLyricBlurEnabled,
+                    ),
+                    _SettingsDivider(),
+                    _SettingsSwitchTile(
+                      icon: Icons.sports_esports_rounded,
+                      iconColor: colorScheme.primary,
+                      title: '播放页音乐游戏',
+                      subtitle: '在播放页右下角显示节奏小游戏入口（关闭后可防误触）',
+                      value: player.playerGameEnabled,
+                      onChanged: player.setPlayerGameEnabled,
                     ),
                     if (player.isDesktopLyricsSupported) ...[
                       _SettingsDivider(),
@@ -495,6 +584,25 @@ class SettingsPage extends StatelessWidget {
                       value: theme.carModeEnabled,
                       onChanged: (value) => theme.setCarModeEnabled(value),
                     ),
+                    if (theme.carModeEnabled) ...[
+                      _SettingsDivider(),
+                      _SettingsTile(
+                        icon: Icons.aspect_ratio_rounded,
+                        iconColor: colorScheme.primary,
+                        title: '车机界面缩放',
+                        subtitle: '${theme.carModeScale}x',
+                        onTap: () => _selectCarModeScale(context, theme),
+                      ),
+                    ],
+                    _SettingsDivider(),
+                    _SettingsSwitchTile(
+                      icon: Icons.blur_linear_rounded,
+                      iconColor: colorScheme.primary,
+                      title: '液态玻璃动效',
+                      subtitle: '全屏流体极光与悬浮磨砂质感（若翻动歌词或界面掉帧建议关闭）',
+                      value: theme.liquidGlassEnabled,
+                      onChanged: (value) => theme.setLiquidGlassEnabled(value),
+                    ),
                   ],
                 ),
                 const SizedBox(height: 24),
@@ -503,6 +611,18 @@ class SettingsPage extends StatelessWidget {
                 const SizedBox(height: 8),
                 _SettingsCard(
                   children: [
+                    _SettingsTile(
+                      icon: Icons.receipt_long_rounded,
+                      iconColor: colorScheme.primary,
+                      title: '运行日志与诊断',
+                      subtitle: '查看实时日志、排查异常及导出日志文件',
+                      onTap: () => Navigator.of(context).push(
+                        MaterialPageRoute(
+                          builder: (_) => const LogViewerPage(),
+                        ),
+                      ),
+                    ),
+                    _SettingsDivider(),
                     _SettingsTile(
                       icon: Icons.info_outline_rounded,
                       iconColor: colorScheme.primary,
@@ -866,6 +986,8 @@ class _CacheManagementSheetState extends State<_CacheManagementSheet> {
   int? _dataCacheSize;
   int? _downloadSize;
   int? _playCacheSize;
+  String? _downloadDirPath;
+  String? _customDownloadDir;
   bool _clearing = false;
 
   @override
@@ -881,6 +1003,7 @@ class _CacheManagementSheetState extends State<_CacheManagementSheet> {
         dataCache = await widget.cache!.getCacheSize();
       } catch (_) {}
     }
+    String? dirPath, customDir;
     if (widget.downloads != null) {
       try {
         download = await widget.downloads!.getDownloadDirSize();
@@ -888,12 +1011,18 @@ class _CacheManagementSheetState extends State<_CacheManagementSheet> {
       try {
         playCache = await widget.downloads!.getPlayCacheDirSize();
       } catch (_) {}
+      try {
+        dirPath = await widget.downloads!.getDownloadDirPath();
+        customDir = await widget.downloads!.getCustomDownloadDir();
+      } catch (_) {}
     }
     if (mounted) {
       setState(() {
         _dataCacheSize = dataCache;
         _downloadSize = download;
         _playCacheSize = playCache;
+        _downloadDirPath = dirPath;
+        _customDownloadDir = customDir;
       });
     }
   }
@@ -946,7 +1075,9 @@ class _CacheManagementSheetState extends State<_CacheManagementSheet> {
                 return RadioListTile<int>(
                   title: Text(opt.label),
                   value: opt.value,
+                  // ignore: deprecated_member_use
                   groupValue: currentLimit,
+                  // ignore: deprecated_member_use
                   onChanged: (val) {
                     Navigator.of(dialogContext).pop(val);
                   },
@@ -1028,6 +1159,57 @@ class _CacheManagementSheetState extends State<_CacheManagementSheet> {
               title: '下载文件',
               size: _formatSize(_downloadSize),
               onClear: null, // 下载文件用户主动管理，不提供一键清理
+            ),
+            const SizedBox(height: 10),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+              decoration: BoxDecoration(
+                color: Theme.of(context).colorScheme.surfaceContainerHighest.withValues(alpha: 0.4),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Icon(Icons.folder_outlined, size: 20, color: Theme.of(context).colorScheme.primary),
+                      const SizedBox(width: 8),
+                      Text(
+                        '下载存储目录',
+                        style: Theme.of(context).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.bold),
+                      ),
+                      const Spacer(),
+                      if (_customDownloadDir != null)
+                        TextButton(
+                          onPressed: () async {
+                            await widget.downloads?.setCustomDownloadDir(null);
+                            await _loadSizes();
+                            Toast.success('已恢复默认下载目录');
+                          },
+                          child: const Text('恢复默认', style: TextStyle(fontSize: 12)),
+                        ),
+                      TextButton(
+                        onPressed: () async {
+                          final selected = await FilePicker.getDirectoryPath();
+                          if (selected != null && selected.isNotEmpty) {
+                            await widget.downloads?.setCustomDownloadDir(selected);
+                            await _loadSizes();
+                            Toast.success('已更改下载目录');
+                          }
+                        },
+                        child: const Text('更改目录', style: TextStyle(fontSize: 12)),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    _downloadDirPath ?? '正在获取路径…',
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                ],
+              ),
             ),
             const SizedBox(height: 10),
             _CacheItem(

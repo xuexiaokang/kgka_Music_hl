@@ -1,14 +1,10 @@
 name: Build Android APK
 
-# 触发条件：
-#   1. 推送到 master 或 main 分支时自动构建
-#   2. 推送 v* 标签时构建并自动发布 GitHub Release
-#   3. 可在 Actions 页面手动触发 (workflow_dispatch)
+# 触发条件（为节省 GitHub Actions 免费额度，已取消「每次 push 自动构建」）：
+#   1. 推送 v* 标签时构建并自动发布 GitHub Release
+#   2. 可在 Actions 页面手动触发 (workflow_dispatch) 做验证构建
 on:
   push:
-    branches:
-      - master
-      - main
     tags:
       - 'v*'
   workflow_dispatch:

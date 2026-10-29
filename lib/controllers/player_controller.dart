@@ -10,9 +10,11 @@ import 'package:flutter/scheduler.dart';
 import 'package:just_audio/just_audio.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../core/shuffle_cycle.dart';
 import '../models/music_models.dart';
 import '../services/audio_effects_service.dart';
 import '../services/cache_service.dart';
+import '../services/cover_service.dart';
 import '../services/desktop_lyrics_service.dart';
 import '../services/music_api.dart';
 import '../services/local_lyrics_service.dart';
@@ -21,6 +23,7 @@ import '../services/bluetooth_lyrics_service.dart';
 import '../services/playback_history_service.dart';
 import '../services/playback_stats_service.dart';
 import '../services/super_lyric_service.dart';
+import '../services/netease_image_provider.dart';
 import 'download_controller.dart';
 import 'local_music_controller.dart';
 
@@ -61,14 +64,18 @@ class PlayerController extends ChangeNotifier {
       'settings.bluetooth_lyrics_enabled';
   static const _keepScreenOnSettingKey = 'settings.keep_screen_on';
   static const _lyricBlurSettingKey = 'settings.lyric_blur_enabled';
+  static const _playerGameEnabledSettingKey = 'settings.player_game_enabled';
   static const _queueKey = 'playback.queue';
   static const _currentSongKey = 'playback.current_song';
   static const _currentPositionKey = 'playback.current_position';
   static const _playbackModeKey = 'playback.mode';
   static const _queueSaveDebounceMs = 500;
   static const _positionSaveInterval = Duration(seconds: 5);
-  static const _listenTimeReportInterval = Duration(minutes: 30);
-  static const _listenTimeCheckInterval = Duration(minutes: 1);
+  static const _listenTimeReportInterval = Duration(minutes: 5);
+  static const _listenTimeCheckInterval = Duration(seconds: 15);
+  static const _pendingListenTimeKey = 'settings.pending_listen_time_ms';
+  static const _bluetoothLyricsTitleSyncSettingKey =
+      'settings.bluetooth_lyrics_title_sync_enabled';
   static const _defaultEqualizerLevels = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
   static const equalizerPresets = [
     AudioEffectPreset(name: '平直', levels: _defaultEqualizerLevels),
@@ -108,7 +115,8 @@ class PlayerController extends ChangeNotifier {
   LocalMusicController? localMusic;
 
   PlayerController(this._api, this._audioHandler) {
-    unawaited(_restoreSettings());
+    final settingsRestore = _restoreSettings();
+    unawaited(settingsRestore);
     unawaited(_superLyric.registerPublisher());
     _audioHandler.attachTransportControls(onNext: next, onPrevious: previous);
     _desktopLyrics.setVisibilityChangedHandler(_handleDesktopLyricsVisibility);
@@ -179,11 +187,17 @@ class PlayerController extends ChangeNotifier {
       );
       unawaited(_scheduleRecovery(reason: 'player-error'));
     });
-    unawaited(_setupAudioSessionListeners());
+    // 先恢复用户的打断设置，再配置 AudioSession，避免首次播放与
+    // 异步会话配置竞态，导致点歌后停在暂停状态。
+    _audioSessionReady = settingsRestore.then(
+      (_) => _setupAudioSessionListeners(),
+    );
+    unawaited(_audioSessionReady);
   }
 
   final MusicApi _api;
   final MusicAudioHandler _audioHandler;
+  late final Future<void> _audioSessionReady;
 
   /// 持久化设置恢复完成信号。
   ///
@@ -217,7 +231,8 @@ class PlayerController extends ChangeNotifier {
   // 平滑位置的上一次取值：用于过滤位置流的小幅倒退（音频缓冲/时钟抖动），
   // 避免歌词高亮和卡拉OK进度出现回跳。seek/换歌的大跨度回退会重建基线。
   Duration _lastSmoothPosition = Duration.zero;
-  final _random = math.Random();
+  final _shuffleCycle = ShuffleCycle<String>();
+
   /// 高潮试听结束时间（播放到该时间自动暂停）。
   Duration? _climaxEndTime;
 
@@ -250,6 +265,7 @@ class PlayerController extends ChangeNotifier {
   Timer? _listenTimeTimer;
   Timer? _queueSaveTimer;
   Timer? _positionSaveTimer;
+  Timer? _playCacheTimer;
   DateTime? _listenTimeStartedAt;
   Duration _pendingListenTime = Duration.zero;
   bool _isReportingListenTime = false;
@@ -257,6 +273,8 @@ class PlayerController extends ChangeNotifier {
   bool _isSeeking = false;
   bool _isScrubbing = false;
   bool _isHandlingCompletion = false;
+  int _playRequestSerial = 0;
+  Future<void> _sourceChangeTail = Future<void>.value();
   bool _isPersonalFmActive = false;
   bool _isLoadingPersonalFm = false;
   int _personalFmRequestSerial = 0;
@@ -282,6 +300,7 @@ class PlayerController extends ChangeNotifier {
   bool addListeningTimeEnabled = true;
   bool keepScreenOnEnabled = false;
   bool lyricBlurEnabled = false;
+  bool playerGameEnabled = true;
   AudioQuality audioQuality = AudioQuality.standard;
 
   bool get isPersonalFmActive => _isPersonalFmActive;
@@ -302,10 +321,11 @@ class PlayerController extends ChangeNotifier {
   bool bassBoostEnabled = false;
   double bassBoostStrength = 0.45;
   bool audioInterruptionEnabled = true;
-  bool autoResumeAfterInterruption = false;
+  bool autoResumeAfterInterruption = true;
   bool autoPlayOnDeviceConnected = false;
   bool volumeNormalizationEnabled = false;
   bool bluetoothLyricsEnabled = false;
+  bool bluetoothLyricsTitleSyncEnabled = false;
   bool desktopLyricsEnabled = false;
   DesktopLyricsSettings desktopLyricsSettings = const DesktopLyricsSettings();
   Timer? _autoResumeTimer;
@@ -375,7 +395,26 @@ class PlayerController extends ChangeNotifier {
     if (identicalIndex >= 0) {
       return identicalIndex;
     }
-    return queue.indexWhere((item) => item.hash == song.hash);
+    final identity = _songIdentity(song);
+    if (identity.isNotEmpty) {
+      final idIndex = queue.indexWhere((item) => _songIdentity(item) == identity);
+      if (idIndex >= 0) {
+        return idIndex;
+      }
+    }
+    if (song.hash.isNotEmpty) {
+      final hashIndex = queue.indexWhere((item) => item.hash == song.hash);
+      if (hashIndex >= 0) {
+        return hashIndex;
+      }
+    }
+    if (song.id.isNotEmpty) {
+      final idIndex = queue.indexWhere((item) => item.id == song.id);
+      if (idIndex >= 0) {
+        return idIndex;
+      }
+    }
+    return -1;
   }
 
   int get activeLyricIndex {
@@ -402,11 +441,21 @@ class PlayerController extends ChangeNotifier {
   }
 
   PlaybackMode cyclePlaybackMode() {
+    _shuffleCycle.clear();
     playbackMode = switch (playbackMode) {
       PlaybackMode.playlistLoop => PlaybackMode.shuffle,
       PlaybackMode.shuffle => PlaybackMode.singleLoop,
       PlaybackMode.singleLoop => PlaybackMode.playlistLoop,
     };
+    if (playbackMode == PlaybackMode.shuffle && queue.isNotEmpty) {
+      final currentIdentity = currentSong == null
+          ? null
+          : _songIdentity(currentSong!);
+      _shuffleCycle.reset(
+        queue.map(_songIdentity).where((identity) => identity.isNotEmpty),
+        current: currentIdentity,
+      );
+    }
     _saveQueueState();
     notifyListeners();
     return playbackMode;
@@ -447,12 +496,34 @@ class PlayerController extends ChangeNotifier {
     notifyListeners();
   }
 
+  Future<void> setPlayerGameEnabled(bool enabled) async {
+    if (playerGameEnabled == enabled) {
+      return;
+    }
+    playerGameEnabled = enabled;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_playerGameEnabledSettingKey, enabled);
+    notifyListeners();
+  }
+
   Future<void> playSong(
     Song song, {
     List<Song>? queue,
     bool preservePersonalFmSession = false,
   }) async {
-    if (!preservePersonalFmSession) {
+    final requestSerial = ++_playRequestSerial;
+    debugPrint(
+      '[KA Music][playback] request=$requestSerial begin '
+      'incomingQueue=${queue?.length ?? 0}',
+    );
+    final isPlayingWithinCurrentQueue =
+        _isPersonalFmActive &&
+        (queue == null ||
+            identical(queue, this.queue) ||
+            _isSameQueue(queue, this.queue));
+    final shouldPreserveFm =
+        preservePersonalFmSession || isPlayingWithinCurrentQueue;
+    if (!shouldPreserveFm) {
       _isPersonalFmActive = false;
       _isLoadingPersonalFm = false;
       _personalFmRequestSerial++;
@@ -461,15 +532,42 @@ class PlayerController extends ChangeNotifier {
     climax = null;
     _completionFallbackTimer?.cancel();
     _resetRecovery();
+    _playCacheTimer?.cancel();
+    unawaited(downloadController?.cancelActivePlayCache());
     _completedSongHash = null;
     isPreparing = true;
     _isChangingSource = true;
     errorMessage = null;
+    final replacesQueue =
+        queue != null && queue.isNotEmpty && !_isSameQueue(queue, this.queue);
+    final previousSong = currentSong;
+    final wasPlaying = isPlaying &&
+        audioPlayer.processingState != ProcessingState.completed &&
+        !_isHandlingCompletion;
+    if (previousSong != null && previousSong != song) {
+      if (wasPlaying) {
+        // 用户手动切歌且旧音频正在播放时，仅静音旧音频，
+        // 避免网络解析加载期间继续外放，同时保持 Audio Focus 与 WakeLock 不中断；
+        // 绝不能在后台切歌或自然播完切歌时调用 pause()，否则会导致系统释放 WakeLock 并撤销 Audio Focus，
+        // 造成黑屏切歌卡住不播、必须点亮屏幕才恢复播放。
+        unawaited(audioPlayer.setVolume(0.0));
+      }
+    }
     currentSong = song;
     if (queue != null && queue.isNotEmpty) {
       this.queue = queue;
     } else if (this.queue.isEmpty) {
       this.queue = [song];
+    }
+    final songIdentity = _songIdentity(song);
+    if (playbackMode == PlaybackMode.shuffle && replacesQueue) {
+      _shuffleCycle.reset(
+        this.queue.map(_songIdentity).where((identity) => identity.isNotEmpty),
+        current: songIdentity,
+      );
+    } else if (playbackMode == PlaybackMode.shuffle &&
+        songIdentity.isNotEmpty) {
+      _shuffleCycle.markPlayed(songIdentity);
     }
     lyrics = const [];
     _lastDesktopLyricIndex = -1;
@@ -488,13 +586,29 @@ class PlayerController extends ChangeNotifier {
     try {
       String url;
       String? networkUrl;
-      final local = downloadController?.localPathFor(song, audioQuality);
+      debugPrint(
+        '[KA Music][playback] request=$requestSerial local-lookup begin',
+      );
+      final local = await downloadController?.localPathFor(song, audioQuality);
+      if (requestSerial != _playRequestSerial) return;
+      debugPrint(
+        '[KA Music][playback] request=$requestSerial local-lookup complete '
+        'found=${local != null}',
+      );
       if (local != null) {
         url = local;
       } else if (song.source == SongSource.local) {
         url = song.id;
       } else {
+        debugPrint(
+          '[KA Music][playback] request=$requestSerial url-resolve begin',
+        );
         final playUrl = await _resolvePlayUrl(song);
+        if (requestSerial != _playRequestSerial) return;
+        debugPrint(
+          '[KA Music][playback] request=$requestSerial url-resolve complete '
+          'empty=${playUrl.url.isEmpty}',
+        );
         if (playUrl.url.isEmpty) {
           throw Exception(
             song.isCloudDrive
@@ -507,36 +621,91 @@ class PlayerController extends ChangeNotifier {
         url = playUrl.url;
         networkUrl = playUrl.url;
       }
-      await _audioHandler.loadSong(
-        song: song,
-        url: url,
-        queueSongs: this.queue,
-        queueIndex: currentIndex,
+      if (requestSerial != _playRequestSerial) return;
+
+      // setUrl/setAudioSource 不能并发执行。快速点击“下一曲”时，让已经开始的
+      // 音源切换先安全结束，再由最后一次请求接管，避免旧请求反向覆盖新歌曲。
+      debugPrint(
+        '[KA Music][playback] request=$requestSerial source-queue enter',
       );
-      isPreparing = false;
-      notifyListeners();
-      unawaited(loadLyrics(song));
-      await _audioHandler.play();
-      // 记录播放历史与本地播放统计（后台执行，不阻塞播放）
-      unawaited(_historyService.record(song));
-      unawaited(_statsService.recordPlay(song));
-      // 首播后后台缓存（仅当本次用的是网络 URL）
-      if (networkUrl != null) {
-        unawaited(
-          downloadController?.cacheForPlayback(song, audioQuality, networkUrl),
+      await _serializeSourceChange(() async {
+        if (requestSerial != _playRequestSerial) return;
+        debugPrint(
+          '[KA Music][playback] request=$requestSerial source-load begin',
         );
-      }
+        await _audioHandler.loadSong(
+          song: song,
+          url: url,
+          queueSongs: this.queue,
+          queueIndex: currentIndex,
+        );
+        if (requestSerial != _playRequestSerial) return;
+        debugPrint(
+          '[KA Music][playback] request=$requestSerial source-loaded '
+          'local=${networkUrl == null}',
+        );
+
+        isPreparing = false;
+        notifyListeners();
+        unawaited(loadLyrics(song));
+        if (wasPlaying) {
+          unawaited(audioPlayer.setVolume(1.0));
+        }
+        await _startPlayback();
+        if (requestSerial != _playRequestSerial) return;
+        unawaited(_applyVolumeNormalization());
+        unawaited(_applyEqualizer());
+        unawaited(_applyBassBoost());
+        debugPrint(
+          '[KA Music][playback] request=$requestSerial started '
+          'playing=${audioPlayer.playing} '
+          'state=${audioPlayer.processingState.name}',
+        );
+
+        // 记录播放历史与本地播放统计（后台执行，不阻塞播放）
+        unawaited(_historyService.record(song));
+        unawaited(_statsService.recordPlay(song));
+        // 稳定播放 15 秒后再后台缓存（避免快速切歌重复消耗大量流量）
+        if (networkUrl != null) {
+          _schedulePlayCache(song, audioQuality, networkUrl);
+        }
+      });
     } catch (error) {
+      if (requestSerial != _playRequestSerial) return;
+      debugPrint('[KA Music][playback] request=$requestSerial failed: $error');
       errorMessage = error.toString();
+      unawaited(_audioHandler.pause());
+      if (wasPlaying) {
+        unawaited(audioPlayer.setVolume(1.0));
+      }
       isPreparing = false;
       notifyListeners();
     } finally {
-      _isChangingSource = false;
-      if (isPreparing) {
-        isPreparing = false;
-        notifyListeners();
+      if (requestSerial == _playRequestSerial) {
+        _isChangingSource = false;
+        if (isPreparing) {
+          isPreparing = false;
+          notifyListeners();
+        }
       }
     }
+  }
+
+  Future<void> _serializeSourceChange(Future<void> Function() operation) async {
+    final previous = _sourceChangeTail;
+    final turnCompleted = Completer<void>();
+    _sourceChangeTail = turnCompleted.future;
+    try {
+      await previous;
+      await operation();
+    } finally {
+      turnCompleted.complete();
+    }
+  }
+
+  Future<void> _startPlayback() async {
+    await _audioSessionReady;
+    await _audioHandler.play();
   }
 
   /// 启动固定为“红心 Radio + 根据口味”的私人 FM 会话。
@@ -582,11 +751,32 @@ class PlayerController extends ChangeNotifier {
   }
 
   /// 预缓存歌曲封面到 Flutter ImageCache，打开播放页时可立即显示。
+  ///
+  /// 地址按显示尺寸规格化：网易云封面原图 1~2MB，取 `?param=480y480` 只有
+  /// 300KB 左右（见 [CoverService.sized]）。歌曲完全没有封面时再按来源补取。
   void _precacheCover(Song song) {
-    final coverUrl = song.coverUrl;
-    if (coverUrl == null || coverUrl.isEmpty) return;
-    if (coverUrl.startsWith('content://')) return; // 本地封面走原生加载，不预缓存
-    final provider = NetworkImage(coverUrl);
+    final coverUrl = CoverService.sized(song.coverUrl, 240);
+    if (coverUrl != null && coverUrl.isNotEmpty) {
+      _resolveCoverProvider(coverUrl);
+      return;
+    }
+    unawaited(
+      CoverService.instance.resolve(song).then((url) {
+        if (url == null || url.isEmpty) return;
+        _resolveCoverProvider(CoverService.sized(url, 240) ?? url);
+      }),
+    );
+  }
+
+  /// 按来源选择合适的 ImageProvider 预热。
+  ///
+  /// 网易云必须走 [NeteaseImageProvider]：它在 HttpClient 层用 `set` 覆盖
+  /// User-Agent；用 `NetworkImage(headers:)` 会变成两个 User-Agent 而被 403。
+  void _resolveCoverProvider(String url) {
+    if (url.startsWith('content://')) return; // 本地封面走原生加载，不预缓存
+    final ImageProvider provider = CoverService.isNeteaseImage(url)
+        ? NeteaseImageProvider(url)
+        : NetworkImage(url);
     provider.resolve(ImageConfiguration.empty);
   }
 
@@ -623,7 +813,7 @@ class PlayerController extends ChangeNotifier {
       // 返回空地址：按智能音质策略降级重试
       final fallback = _nextLowerQuality(audioQuality);
       if (fallback == null) return playUrl;
-      return _api.songUrl(
+      return await _api.songUrl(
         song,
         quality: fallback,
         hashOnly: _isPersonalFmActive,
@@ -792,7 +982,7 @@ class PlayerController extends ChangeNotifier {
     try {
       String url;
       String? networkUrl;
-      final local = downloadController?.localPathFor(song, audioQuality);
+      final local = await downloadController?.localPathFor(song, audioQuality);
       if (local != null) {
         url = local;
       } else if (song.source == SongSource.local) {
@@ -898,6 +1088,44 @@ class PlayerController extends ChangeNotifier {
     return true;
   }
 
+  /// 当当前队列仍是 [expectedQueue] 时，用 [newQueue] 补齐播放队列。
+  ///
+  /// 歌单页会先用已经展示的歌曲立即开始播放，再在后台拉取完整歌单。
+  /// 只有用户期间没有切换到其他队列时才应用刷新结果，避免后台请求覆盖
+  /// 用户随后主动选择的新歌单。
+  Future<bool> replaceQueueIfMatches({
+    required List<Song> expectedQueue,
+    required List<Song> newQueue,
+  }) async {
+    final song = currentSong;
+    if (song == null ||
+        newQueue.isEmpty ||
+        !_isSameQueue(queue, expectedQueue)) {
+      return false;
+    }
+
+    final currentIdentity = _songIdentity(song);
+    if (!newQueue.any((item) => _songIdentity(item) == currentIdentity)) {
+      return false;
+    }
+
+    queue = List<Song>.of(newQueue);
+    if (playbackMode == PlaybackMode.shuffle) {
+      _shuffleCycle.reset(
+        queue.map(_songIdentity).where((identity) => identity.isNotEmpty),
+        current: currentIdentity,
+      );
+    }
+    await _audioHandler.setSongQueue(
+      queueSongs: queue,
+      queueIndex: currentIndex,
+      currentSong: song,
+    );
+    _saveQueueState();
+    notifyListeners();
+    return true;
+  }
+
   Future<void> setAudioQuality(
     AudioQuality quality, {
     bool reloadCurrent = false,
@@ -992,9 +1220,19 @@ class PlayerController extends ChangeNotifier {
   }
 
   /// 车载蓝牙歌词功能是否受支持（仅 Android）。
-  bool get isBluetoothLyricsSupported => BluetoothLyricsService.isSupportedPlatform;
+  bool get isBluetoothLyricsSupported =>
+      BluetoothLyricsService.isSupportedPlatform;
 
   /// 开关车载蓝牙歌词功能。
+  Future<void> setBluetoothLyricsTitleSyncEnabled(bool enabled) async {
+    if (bluetoothLyricsTitleSyncEnabled == enabled) return;
+    bluetoothLyricsTitleSyncEnabled = enabled;
+    _audioHandler.setBluetoothLyricsTitleSync(enabled);
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_bluetoothLyricsTitleSyncSettingKey, enabled);
+    notifyListeners();
+  }
+
   Future<void> setBluetoothLyricsEnabled(bool enabled) async {
     if (bluetoothLyricsEnabled == enabled) return;
     bluetoothLyricsEnabled = enabled;
@@ -1210,21 +1448,36 @@ class PlayerController extends ChangeNotifier {
       if (audioPlayer.processingState == ProcessingState.completed) {
         await _audioHandler.seek(Duration.zero);
       }
-      await _audioHandler.play();
+      await _startPlayback();
     }
+  }
+
+  /// 当前歌曲是否支持高潮片段。
+  ///
+  /// 只有酷狗提供 `/song/climax`；网易云的 hash 是 `ne_<id>`，接口只返回
+  /// 空对象 `{}`，本地歌曲同理，所以直接判定不支持，避免点了才报错。
+  bool get isClimaxSupported {
+    final song = currentSong;
+    if (song == null) return false;
+    if (song.source != SongSource.kugou) return false;
+    return song.hash.isNotEmpty && !song.hash.startsWith('ne_');
   }
 
   /// 试听当前歌曲的高潮片段：定位到高潮开始并播放，到高潮结束自动暂停。
   /// 返回是否成功（无高潮片段或失败时返回 false）。
   Future<bool> playClimaxPreview() async {
     final song = currentSong;
-    if (song == null) return false;
+    if (song == null || !isClimaxSupported) return false;
     try {
-      final climax = await _api.songClimax(song.hash);
-      if (climax == null) return false;
-      this.climax = climax;
-      _climaxEndTime = climax.endTime;
-      await seek(climax.startTime);
+      // 切歌时已经预取过就直接用，避免每次点击都多打一次接口
+      final cached = climax;
+      final data = cached != null && cached.isValid
+          ? cached
+          : await _api.songClimax(song.hash);
+      if (data == null) return false;
+      climax = data;
+      _climaxEndTime = data.endTime;
+      await seek(data.startTime);
       await play();
       return true;
     } catch (_) {
@@ -1242,6 +1495,16 @@ class PlayerController extends ChangeNotifier {
 
   /// 异步获取当前歌曲高潮时间，用于进度条标记（失败静默）。
   Future<void> _loadClimax(Song song) async {
+    // 网易云 / 本地歌曲没有高潮数据，不发无效请求
+    if (song.source != SongSource.kugou ||
+        song.hash.isEmpty ||
+        song.hash.startsWith('ne_')) {
+      if (currentSong?.hash == song.hash && climax != null) {
+        climax = null;
+        notifyListeners();
+      }
+      return;
+    }
     try {
       final result = await _api.songClimax(song.hash);
       if (currentSong?.hash != song.hash) return;
@@ -1312,10 +1575,10 @@ class PlayerController extends ChangeNotifier {
   }
 
   Future<void> previous() async {
-    final index = currentIndex;
-    if (index > 0) {
+    final prevSong = _previousSong();
+    if (prevSong != null) {
       await playSong(
-        queue[index - 1],
+        prevSong,
         queue: queue,
         preservePersonalFmSession: _isPersonalFmActive,
       );
@@ -1359,7 +1622,7 @@ class PlayerController extends ChangeNotifier {
       if (!_isPersonalFmActive && playbackMode == PlaybackMode.singleLoop) {
         _completedSongHash = null;
         await _audioHandler.seek(Duration.zero);
-        await _audioHandler.play();
+        await _startPlayback();
         return;
       }
 
@@ -1418,7 +1681,7 @@ class PlayerController extends ChangeNotifier {
     try {
       String url;
       String? networkUrl;
-      final local = downloadController?.localPathFor(song, audioQuality);
+      final local = await downloadController?.localPathFor(song, audioQuality);
       if (local != null) {
         url = local;
       } else if (song.source == SongSource.local) {
@@ -1455,13 +1718,11 @@ class PlayerController extends ChangeNotifier {
         await _audioHandler.seek(_clampPosition(targetPosition));
       }
       if (resumePlayback) {
-        await _audioHandler.play();
+        await _startPlayback();
       }
-      // 切音质后后台缓存
+      // 切音质稳定播放后再后台缓存
       if (networkUrl != null) {
-        unawaited(
-          downloadController?.cacheForPlayback(song, audioQuality, networkUrl),
-        );
+        _schedulePlayCache(song, audioQuality, networkUrl);
       }
     } catch (error) {
       errorMessage = error.toString();
@@ -1483,7 +1744,7 @@ class PlayerController extends ChangeNotifier {
             _autoResumeTimer?.cancel();
             _autoResumeTimer = Timer(const Duration(milliseconds: 300), () {
               if (!isPlaying && currentSong != null) {
-                unawaited(_audioHandler.play());
+                unawaited(_startPlayback());
               }
             });
           }
@@ -1494,7 +1755,7 @@ class PlayerController extends ChangeNotifier {
             _autoResumeTimer?.cancel();
             _autoResumeTimer = Timer(const Duration(milliseconds: 500), () {
               if (!isPlaying && currentSong != null) {
-                unawaited(_audioHandler.play());
+                unawaited(_startPlayback());
               }
             });
           }
@@ -1509,7 +1770,7 @@ class PlayerController extends ChangeNotifier {
           _autoResumeTimer?.cancel();
           _autoResumeTimer = Timer(const Duration(milliseconds: 500), () {
             if (!isPlaying && currentSong != null) {
-              unawaited(_audioHandler.play());
+              unawaited(_startPlayback());
             }
           });
         }
@@ -1520,19 +1781,21 @@ class PlayerController extends ChangeNotifier {
           final addedDevices = devices.difference(_previousDevices!);
           if (addedDevices.isNotEmpty) {
             // ignore: experimental_member_use
-            final hasNewAudioDevice = addedDevices.any((d) =>
-                // ignore: experimental_member_use
-                d.type == AudioDeviceType.bluetoothA2dp ||
-                // ignore: experimental_member_use
-                d.type == AudioDeviceType.bluetoothLe ||
-                // ignore: experimental_member_use
-                d.type == AudioDeviceType.bluetoothSco ||
-                // ignore: experimental_member_use
-                d.type == AudioDeviceType.wiredHeadset ||
-                // ignore: experimental_member_use
-                d.type == AudioDeviceType.wiredHeadphones ||
-                // ignore: experimental_member_use
-                d.type == AudioDeviceType.carAudio);
+            final hasNewAudioDevice = addedDevices.any(
+              (d) =>
+                  // ignore: experimental_member_use
+                  d.type == AudioDeviceType.bluetoothA2dp ||
+                  // ignore: experimental_member_use
+                  d.type == AudioDeviceType.bluetoothLe ||
+                  // ignore: experimental_member_use
+                  d.type == AudioDeviceType.bluetoothSco ||
+                  // ignore: experimental_member_use
+                  d.type == AudioDeviceType.wiredHeadset ||
+                  // ignore: experimental_member_use
+                  d.type == AudioDeviceType.wiredHeadphones ||
+                  // ignore: experimental_member_use
+                  d.type == AudioDeviceType.carAudio,
+            );
 
             if (hasNewAudioDevice &&
                 autoPlayOnDeviceConnected &&
@@ -1541,7 +1804,7 @@ class PlayerController extends ChangeNotifier {
               _autoResumeTimer?.cancel();
               _autoResumeTimer = Timer(const Duration(milliseconds: 500), () {
                 if (!isPlaying && currentSong != null) {
-                  unawaited(_audioHandler.play());
+                  unawaited(_startPlayback());
                 }
               });
             }
@@ -1713,8 +1976,11 @@ class PlayerController extends ChangeNotifier {
       _lastSuperLyricPlaying = true;
       final clampedIndex = index.clamp(0, lyrics.length - 1);
       final line = lyrics[clampedIndex];
-      final lineEndTime = line.time +
-          (line.duration ?? _estimatedLineDuration(clampedIndex) ?? Duration.zero);
+      final lineEndTime =
+          line.time +
+          (line.duration ??
+              _estimatedLineDuration(clampedIndex) ??
+              Duration.zero);
       unawaited(
         _superLyric.sendLyric(
           song: currentSong!,
@@ -2030,8 +2296,9 @@ class PlayerController extends ChangeNotifier {
         prefs.getBool(_listenTimeSettingKey) ?? addListeningTimeEnabled;
     keepScreenOnEnabled =
         prefs.getBool(_keepScreenOnSettingKey) ?? keepScreenOnEnabled;
-    lyricBlurEnabled =
-        prefs.getBool(_lyricBlurSettingKey) ?? lyricBlurEnabled;
+    lyricBlurEnabled = prefs.getBool(_lyricBlurSettingKey) ?? lyricBlurEnabled;
+    playerGameEnabled =
+        prefs.getBool(_playerGameEnabledSettingKey) ?? playerGameEnabled;
     audioQuality = AudioQuality.fromApiValue(
       prefs.getString(_audioQualitySettingKey),
     );
@@ -2069,6 +2336,13 @@ class PlayerController extends ChangeNotifier {
     bluetoothLyricsEnabled =
         prefs.getBool(_bluetoothLyricsEnabledSettingKey) ??
             bluetoothLyricsEnabled;
+    final savedPendingMs = prefs.getInt(_pendingListenTimeKey) ?? 0;
+    if (savedPendingMs > 0) {
+      _pendingListenTime = Duration(milliseconds: savedPendingMs);
+    }
+    bluetoothLyricsTitleSyncEnabled =
+        prefs.getBool(_bluetoothLyricsTitleSyncSettingKey) ?? false;
+    _audioHandler.setBluetoothLyricsTitleSync(bluetoothLyricsTitleSyncEnabled);
     playbackSpeed = prefs.getDouble(_playbackSpeedSettingKey) ?? playbackSpeed;
     desktopLyricsEnabled =
         prefs.getBool(_desktopLyricsEnabledSettingKey) ?? desktopLyricsEnabled;
@@ -2204,6 +2478,9 @@ class PlayerController extends ChangeNotifier {
     if (startedAt != null) {
       _pendingListenTime += DateTime.now().difference(startedAt);
       _listenTimeStartedAt = null;
+      SharedPreferences.getInstance().then((prefs) {
+        prefs.setInt(_pendingListenTimeKey, _pendingListenTime.inMilliseconds);
+      }).catchError((_) {});
     }
     _listenTimeTimer?.cancel();
     _listenTimeTimer = null;
@@ -2214,6 +2491,9 @@ class PlayerController extends ChangeNotifier {
     _pendingListenTime = Duration.zero;
     _listenTimeTimer?.cancel();
     _listenTimeTimer = null;
+    SharedPreferences.getInstance().then((prefs) {
+      prefs.remove(_pendingListenTimeKey);
+    }).catchError((_) {});
   }
 
   Duration _trackedListeningTime() {
@@ -2247,11 +2527,62 @@ class PlayerController extends ChangeNotifier {
         _listenTimeTimer?.cancel();
         _listenTimeTimer = null;
       }
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove(_pendingListenTimeKey);
     } catch (error) {
       debugPrint('[KA Music][listen-time] report failed: $error');
     } finally {
       _isReportingListenTime = false;
     }
+  }
+
+  void _schedulePlayCache(Song song, AudioQuality quality, String networkUrl) {
+    _playCacheTimer?.cancel();
+    _playCacheTimer = Timer(const Duration(seconds: 15), () {
+      if (currentSong?.hash != song.hash || !isPlaying) {
+        return;
+      }
+      unawaited(
+        downloadController?.cacheForPlayback(song, quality, networkUrl),
+      );
+    });
+  }
+
+  Song? _previousSong() {
+    if (queue.isEmpty) {
+      return null;
+    }
+
+    final index = currentIndex;
+    if (_isPersonalFmActive) {
+      if (index > 0) {
+        return queue[index - 1];
+      }
+      return null;
+    }
+    if (playbackMode == PlaybackMode.shuffle) {
+      final currentIdentity = currentSong == null
+          ? null
+          : _songIdentity(currentSong!);
+      final prevIdentity = _shuffleCycle.previous(
+        queue.map(_songIdentity).where((identity) => identity.isNotEmpty),
+        current: currentIdentity,
+      );
+      if (prevIdentity == null) return null;
+      return queue.firstWhere(
+        (song) => _songIdentity(song) == prevIdentity,
+        orElse: () => currentSong ?? queue.first,
+      );
+    }
+
+    if (index > 0) {
+      return queue[index - 1];
+    }
+
+    if (queue.length > 1) {
+      return queue.last;
+    }
+    return null;
   }
 
   Song? _nextSong() {
@@ -2267,15 +2598,18 @@ class PlayerController extends ChangeNotifier {
       return null;
     }
     if (playbackMode == PlaybackMode.shuffle) {
-      if (queue.length == 1) return queue.first;
-
-      var nextIndex = _random.nextInt(queue.length);
-      if (index >= 0) {
-        while (nextIndex == index) {
-          nextIndex = _random.nextInt(queue.length);
-        }
-      }
-      return queue[nextIndex];
+      final currentIdentity = currentSong == null
+          ? null
+          : _songIdentity(currentSong!);
+      final nextIdentity = _shuffleCycle.next(
+        queue.map(_songIdentity).where((identity) => identity.isNotEmpty),
+        current: currentIdentity,
+      );
+      if (nextIdentity == null) return currentSong;
+      return queue.firstWhere(
+        (song) => _songIdentity(song) == nextIdentity,
+        orElse: () => currentSong ?? queue.first,
+      );
     }
 
     if (index >= 0 && index < queue.length - 1) {
@@ -2361,6 +2695,15 @@ class PlayerController extends ChangeNotifier {
     return song.id.isEmpty ? '' : 'id:${song.id}';
   }
 
+  bool _isSameQueue(List<Song> a, List<Song> b) {
+    if (identical(a, b)) return true;
+    if (a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (_songIdentity(a[i]) != _songIdentity(b[i])) return false;
+    }
+    return true;
+  }
+
   List<Song> _personalFmAdditions(List<Song> incoming, Song current) {
     final currentIdentity = _songIdentity(current);
     return incoming
@@ -2374,9 +2717,12 @@ class PlayerController extends ChangeNotifier {
 
   @override
   void dispose() {
+    // 让仍在解析播放地址或等待切换音源的请求立即失效，避免销毁后继续更新状态。
+    _playRequestSerial++;
     _pauseListeningTimeTracker();
     _stopPositionSaving();
     _queueSaveTimer?.cancel();
+    _playCacheTimer?.cancel();
     _autoResumeTimer?.cancel();
     _sleepTimer?.cancel();
     _positionSub.cancel();
@@ -2486,7 +2832,10 @@ class PlayerController extends ChangeNotifier {
       await prefs.remove(_currentSongKey);
       await prefs.remove(_currentPositionKey);
     }
-    await prefs.setString(_queueKey, jsonEncode(queue.map((s) => s.toCache()).toList()));
+    await prefs.setString(
+      _queueKey,
+      jsonEncode(queue.map((s) => s.toCache()).toList()),
+    );
     await prefs.setString(_playbackModeKey, playbackMode.name);
   }
 
@@ -2531,8 +2880,10 @@ class PlayerController extends ChangeNotifier {
   }
 
   /// 从本地存储恢复播放队列、当前歌曲和播放进度。
-  Future<void> restoreQueueState() async {
+  Future<bool> restoreQueueState() async {
+    final requestSerial = _playRequestSerial;
     final prefs = await SharedPreferences.getInstance();
+    if (requestSerial != _playRequestSerial) return false;
 
     // 恢复播放模式
     final modeName = prefs.getString(_playbackModeKey);
@@ -2582,14 +2933,26 @@ class PlayerController extends ChangeNotifier {
     }
 
     notifyListeners();
+    return true;
   }
 
   /// 在恢复队列后加载并准备播放当前歌曲（默认不自动播放，仅预加载）。
   ///
   /// [autoPlay] 为 true 时（“恢复上次播放列表”开机模式）加载完成后立即播放。
-  Future<void> prepareRestoredSong({bool autoPlay = false}) async {
-    final song = currentSong;
-    if (song == null) return;
+  Future<void> prepareRestoredSong({
+    bool autoPlay = false,
+    Song? expectedSong,
+  }) async {
+    final song = expectedSong ?? currentSong;
+    if (song == null ||
+        (expectedSong != null && !identical(currentSong, expectedSong))) {
+      return;
+    }
+    final requestSerial = ++_playRequestSerial;
+    debugPrint(
+      '[KA Music][playback] restore-request=$requestSerial begin '
+      'autoPlay=$autoPlay',
+    );
     climax = null;
     unawaited(_loadClimax(song));
 
@@ -2601,42 +2964,57 @@ class PlayerController extends ChangeNotifier {
 
     try {
       String url;
-      final local = downloadController?.localPathFor(song, audioQuality);
+      final local = await downloadController?.localPathFor(song, audioQuality);
+      if (requestSerial != _playRequestSerial) return;
       if (local != null) {
         url = local;
       } else if (song.source == SongSource.local) {
         url = song.id;
       } else {
         final playUrl = await _resolvePlayUrl(song);
+        if (requestSerial != _playRequestSerial) return;
         if (playUrl.url.isEmpty) return;
         url = playUrl.url;
       }
 
-      await _audioHandler.loadSong(
-        song: song,
-        url: url,
-        queueSongs: queue,
-        queueIndex: currentIndex,
-      );
+      // 恢复音源与用户主动点歌共用同一串行队列。覆盖安装后，
+      // 此预加载可能与“播放全部”同时发生；旧恢复请求一旦失效，
+      // 不得再覆盖用户新选择的音源或播放状态。
+      await _serializeSourceChange(() async {
+        if (requestSerial != _playRequestSerial) return;
+        await _audioHandler.loadSong(
+          song: song,
+          url: url,
+          queueSongs: queue,
+          queueIndex: currentIndex,
+        );
+        if (requestSerial != _playRequestSerial) return;
 
-      // 跳转到保存的进度
-      if (restoredPosition > Duration.zero) {
-        await _audioHandler.seek(_clampPosition(restoredPosition));
-      }
+        // 跳转到保存的进度
+        if (restoredPosition > Duration.zero) {
+          await _audioHandler.seek(_clampPosition(restoredPosition));
+          if (requestSerial != _playRequestSerial) return;
+        }
 
-      unawaited(loadLyrics(song));
-      _startPositionSaving();
-      if (autoPlay) {
-        await _audioHandler.play();
-        // 记录播放历史与本地播放统计（后台执行，不阻塞播放）
-        unawaited(_historyService.record(song));
-        unawaited(_statsService.recordPlay(song));
-      }
+        unawaited(loadLyrics(song));
+        _startPositionSaving();
+        if (autoPlay) {
+          await _startPlayback();
+          if (requestSerial != _playRequestSerial) return;
+          // 记录播放历史与本地播放统计（后台执行，不阻塞播放）
+          unawaited(_historyService.record(song));
+          unawaited(_statsService.recordPlay(song));
+        }
+      });
     } catch (e) {
-      debugPrint('[KA Music] Failed to prepare restored song: $e');
+      if (requestSerial == _playRequestSerial) {
+        debugPrint('[KA Music] Failed to prepare restored song: $e');
+      }
     } finally {
-      isPreparing = false;
-      notifyListeners();
+      if (requestSerial == _playRequestSerial) {
+        isPreparing = false;
+        notifyListeners();
+      }
     }
   }
 }

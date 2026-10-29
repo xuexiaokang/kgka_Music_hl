@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import 'retryable_network_image.dart';
+
 class Artwork extends StatelessWidget {
   const Artwork({
     super.key,
@@ -18,12 +20,6 @@ class Artwork extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final imageUrl = url;
-    // 按实际显示尺寸×设备像素比限制解码宽度，避免车机/平板弱 GPU 上全尺寸解码导致首帧卡顿；
-    // 仅设 cacheWidth（保持宽高比），视觉无差别。size 为无穷时不限制。
-    final capDecode = size.isFinite;
-    final cacheW = capDecode
-        ? (size * MediaQuery.devicePixelRatioOf(context)).clamp(1, 2048).round()
-        : null;
     final child = imageUrl == null
         ? _Fallback(icon: icon)
         : imageUrl.startsWith('content://')
@@ -33,21 +29,18 @@ class Artwork extends StatelessWidget {
                 borderRadius: borderRadius,
                 icon: icon,
               )
-            : Image.network(
-                imageUrl,
-                fit: BoxFit.cover,
-                cacheWidth: cacheW,
-                errorBuilder: (context, error, stackTrace) =>
-                    _Fallback(icon: icon),
-                loadingBuilder: (context, child, progress) {
-                  if (progress == null) {
-                    return child;
-                  }
-                  return _ShimmerBox(
-                    size: size,
-                    borderRadius: borderRadius,
-                  );
-                },
+            : RetryableNetworkImage(
+                url: imageUrl,
+                // 固定尺寸的封面按 2 倍图取；铺满容器的大封面取 1024，
+                // 宽高交给外层 SizedBox 约束，不在这里写死 infinity。
+                width: size.isFinite ? size : null,
+                height: size.isFinite ? size : null,
+                cacheWidth: size.isFinite ? (size * 2).round() : 1024,
+                cacheHeight: size.isFinite ? (size * 2).round() : 1024,
+                placeholderBuilder: (context) => _ShimmerBox(
+                  size: size,
+                  borderRadius: borderRadius,
+                ),
               );
 
     return ClipRRect(
@@ -166,72 +159,32 @@ class _Fallback extends StatelessWidget {
   }
 }
 
-/// 图片加载时的 Shimmer 占位效果。
-class _ShimmerBox extends StatefulWidget {
+/// 图片加载时的占位效果（静态轻量渲染，避免多 Ticker 导致高刷滑动掉帧）。
+class _ShimmerBox extends StatelessWidget {
   const _ShimmerBox({required this.size, required this.borderRadius});
 
   final double size;
   final double borderRadius;
 
   @override
-  State<_ShimmerBox> createState() => _ShimmerBoxState();
-}
-
-class _ShimmerBoxState extends State<_ShimmerBox>
-    with SingleTickerProviderStateMixin {
-  late final AnimationController _controller;
-  late final Animation<double> _animation;
-
-  @override
-  void initState() {
-    super.initState();
-    _controller = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 1200),
-    )..repeat();
-    _animation = Tween(begin: -1.0, end: 1.0).animate(
-      CurvedAnimation(parent: _controller, curve: Curves.easeInOutSine),
-    );
-  }
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
-  @override
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final baseColor = isDark
-        ? colorScheme.surfaceContainerHighest
+        ? colorScheme.surfaceContainerHighest.withValues(alpha: 0.6)
         : colorScheme.surfaceContainer;
-    final highlightColor = isDark
-        ? colorScheme.surfaceContainerHighest.withValues(alpha: .4)
-        : Colors.white.withValues(alpha: .6);
 
-    return AnimatedBuilder(
-      animation: _animation,
-      builder: (context, child) {
-        return ClipRRect(
-          borderRadius: BorderRadius.circular(widget.borderRadius),
-          child: DecoratedBox(
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                begin: Alignment(_animation.value - 0.5, 0),
-                end: Alignment(_animation.value + 0.5, 0),
-                colors: [baseColor, highlightColor, baseColor],
-                stops: const [0, 0.5, 1],
-              ),
-            ),
-            child: child,
-          ),
-        );
-      },
-      child: SizedBox(
-        width: widget.size.isFinite ? widget.size : null,
-        height: widget.size.isFinite ? widget.size : null,
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(borderRadius),
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          color: baseColor,
+          borderRadius: BorderRadius.circular(borderRadius),
+        ),
+        child: SizedBox(
+          width: size.isFinite ? size : null,
+          height: size.isFinite ? size : null,
+        ),
       ),
     );
   }

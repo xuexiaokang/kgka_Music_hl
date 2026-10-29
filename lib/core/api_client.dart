@@ -64,14 +64,13 @@ class ApiClient {
       'Content-Type': 'application/json',
     };
 
-    if (token case final value?) {
-      //headers['Authorization'] = 'Bearer $value';
+    if (token case final value? when value.isNotEmpty) {
       headers['X-Kg-Session-Id'] = value;
     }
-    if (t1 case final value?) {
+    if (t1 case final value? when value.isNotEmpty) {
       headers['t1'] = value;
     }
-    if (sessionId case final value?) {
+    if (sessionId case final value? when value.isNotEmpty) {
       headers['X-Kg-Session-Id'] = value;
     }
 
@@ -94,7 +93,7 @@ class ApiClient {
           await Future.delayed(Duration(milliseconds: 500 * (1 << attempt)));
           continue;
         }
-        return _processResponse(response);
+        return await _processResponse(response);
       } on http.ClientException {
         // 网络连接异常（连接超时、断网等），重试
         if (attempt < maxRetries) {

@@ -32,6 +32,11 @@ class ThemeController extends ChangeNotifier {
   static const _carModeEnabledKey = 'theme.car_mode_enabled';
   static const _fontScaleKey = 'theme.font_scale';
   static const _themeModeKey = 'theme.mode';
+  static const _liquidGlassEnabledKey = 'theme.liquid_glass_enabled';
+  static const _carModeScaleKey = 'theme.car_mode_scale';
+
+  /// 车机模式界面缩放档位。
+  static const carModeScaleOptions = [0.85, 1.0, 1.15, 1.3, 1.5];
 
   /// 全局字体大小档位（1.0 = 标准，1.1 = 大，1.2 = 特大）。
   static const fontScaleOptions = [1.0, 1.1, 1.2];
@@ -59,6 +64,8 @@ class ThemeController extends ChangeNotifier {
   bool _landscapeEnabled = false;
   bool _carModeEnabled = false;
   double _fontScale = 1.0;
+  bool _liquidGlassEnabled = true;
+  double _carModeScale = 1.15;
   // 车机检测结果缓存（设备不变，启动时检测一次）。
   bool _isAutomotiveDevice = false;
 
@@ -80,7 +87,9 @@ class ThemeController extends ChangeNotifier {
   bool get carModeEnabled => _carModeEnabled;
 
   double get fontScale => _fontScale;
+  double get carModeScale => _carModeScale;
   bool get isAutomotiveDevice => _isAutomotiveDevice;
+  bool get liquidGlassEnabled => _liquidGlassEnabled;
 
   /// 是否使用了非默认种子色。
   bool get hasCustomSeedColor => _seedColor != const Color(0xFF1478FF);
@@ -115,6 +124,8 @@ class ThemeController extends ChangeNotifier {
       _backgroundOpacity = opacity.clamp(0.0, 0.8);
     }
     final themeModeValue = prefs.getString(_themeModeKey);
+    _liquidGlassEnabled = prefs.getBool(_liquidGlassEnabledKey) ?? true;
+    _carModeScale = prefs.getDouble(_carModeScaleKey) ?? 1.15;
     if (themeModeValue != null) {
       _themeMode = switch (themeModeValue) {
         'light' => ThemeMode.light,
@@ -133,6 +144,15 @@ class ThemeController extends ChangeNotifier {
   }
 
   /// 设置全局外观模式（跟随系统/浅色/深色）。
+  /// 设置是否启用液态玻璃动效。
+  Future<void> setLiquidGlassEnabled(bool enabled) async {
+    if (_liquidGlassEnabled == enabled) return;
+    _liquidGlassEnabled = enabled;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_liquidGlassEnabledKey, enabled);
+    notifyListeners();
+  }
+
   Future<void> setThemeMode(ThemeMode mode) async {
     if (_themeMode == mode) return;
     _themeMode = mode;
@@ -177,6 +197,15 @@ class ThemeController extends ChangeNotifier {
     _fontScale = clamped;
     final prefs = await SharedPreferences.getInstance();
     await prefs.setDouble(_fontScaleKey, clamped);
+    notifyListeners();
+  }
+
+  Future<void> setCarModeScale(double scale) async {
+    final clamped = carModeScaleOptions.contains(scale) ? scale : 1.15;
+    if (_carModeScale == clamped) return;
+    _carModeScale = clamped;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setDouble(_carModeScaleKey, clamped);
     notifyListeners();
   }
 
