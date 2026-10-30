@@ -9,8 +9,10 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Matrix
 import android.graphics.Paint
+import android.graphics.Path
 import android.graphics.RadialGradient
 import android.graphics.Shader
+import android.graphics.SweepGradient
 import android.graphics.drawable.GradientDrawable
 import android.os.Bundle
 import android.view.Choreographer
@@ -494,6 +496,13 @@ class CarPlayerActivity : Activity() {
         }
         discWrap.addView(glossSecondary, FrameLayout.LayoutParams(sizePx, sizePx, Gravity.CENTER))
 
+        // 静态 conic 双叶镜面扫光(不随盘旋转):真实黑胶在灯光下的斜向反光带
+        val conicSheen = ImageView(this).apply {
+            setImageBitmap(makeSheenBitmap(sizePx))
+            scaleType = ImageView.ScaleType.FIT_XY
+        }
+        discWrap.addView(conicSheen, FrameLayout.LayoutParams(sizePx, sizePx, Gravity.CENTER))
+
         // 左右滑动切歌（对齐 Flutter _LandscapeArtworkShowcase.onHorizontalDragEnd）
         val discGesture = android.view.GestureDetector(this,
             object : android.view.GestureDetector.SimpleOnGestureListener() {
@@ -582,6 +591,54 @@ class CarPlayerActivity : Activity() {
         }
         c.drawCircle(cx, cy, r - rim.strokeWidth / 2f, rim)
 
+        return bmp
+    }
+
+    /** 生成静态 conic 双叶镜面扫光(透明底,只在黑胶环形带内):模拟固定光源下真实黑胶的斜向反光。 */
+    private fun makeSheenBitmap(size: Int): Bitmap {
+        val bmp = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
+        val c = Canvas(bmp)
+        val cx = size / 2f
+        val cy = size / 2f
+        val r = size / 2f
+
+        // 两叶高光:0° 与 180° 处最亮,90°/270° 透明;整体旋转 45° 得斜向反光带
+        val sweep = SweepGradient(
+            cx, cy,
+            intArrayOf(0x30FFFFFF, 0x00FFFFFF, 0x30FFFFFF, 0x00FFFFFF, 0x30FFFFFF),
+            floatArrayOf(0f, 0.25f, 0.5f, 0.75f, 1f)
+        )
+        sweep.setLocalMatrix(Matrix().apply { setRotate(45f, cx, cy) })
+        val sheen = Paint(Paint.ANTI_ALIAS_FLAG).apply { shader = sweep }
+
+        // 遮罩成环形(黑胶带 0.66R~0.965R),中心标签区留空
+        val ring = Path().apply {
+            addCircle(cx, cy, r * 0.965f, Path.Direction.CW)
+            addCircle(cx, cy, r * 0.66f, Path.Direction.CW)
+            fillType = Path.FillType.EVEN_ODD
+        }
+        c.save()
+        c.clipPath(ring)
+        c.drawCircle(cx, cy, r, sheen)
+        c.restore()
+
+        // 外缘倒角:真实唱片最外圈是斜切边,在受光侧形成一条细而亮的高光弧
+        val bevelSweep = SweepGradient(
+            cx, cy,
+            intArrayOf(0x55FFFFFF, 0x00FFFFFF, 0x55FFFFFF, 0x00FFFFFF, 0x55FFFFFF),
+            floatArrayOf(0f, 0.25f, 0.5f, 0.75f, 1f)
+        )
+        bevelSweep.setLocalMatrix(Matrix().apply { setRotate(45f, cx, cy) })
+        val bevel = Paint(Paint.ANTI_ALIAS_FLAG).apply { shader = bevelSweep }
+        val bevelBand = Path().apply {
+            addCircle(cx, cy, r * 0.974f, Path.Direction.CW)
+            addCircle(cx, cy, r * 0.952f, Path.Direction.CW)
+            fillType = Path.FillType.EVEN_ODD
+        }
+        c.save()
+        c.clipPath(bevelBand)
+        c.drawCircle(cx, cy, r, bevel)
+        c.restore()
         return bmp
     }
 
