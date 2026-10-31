@@ -27,7 +27,7 @@
 ```
 HEAD   = 最新的「docs: 交接文档快照」提交（自指，不写死 SHA）
 origin = 已同步（0/0）
-upstream/master = 落后 0、领先 8
+upstream/master = 落后 0、领先 10
 pubspec = version: 2026.10.31+20265   （app_config.dart 同步 appVersion/appVersionCode）
 工作区 = 干净
 ```
@@ -99,6 +99,37 @@ pubspec = version: 2026.10.31+20265   （app_config.dart 同步 appVersion/appVe
 > 调参教训：①盘面"黑度"由底色+面光覆盖角共同决定；②外缘处理宽度超过 ~2% 半径就会读成独立一圈"厚边"，且暗侧面/受光弧任一过强都会放大它——**边缘存在感应远小于沟槽带**；③1px 沟槽必须 2x 超采样；④主观调优必须先渲染候选图供用户选；⑤amend 前必须确认 HEAD 就是目标提交（曾误把代码 amend 进 docs 提交）；⑥多轮迭代后重建提交链用 `git reset --soft <基线>` + 分次 add，比 amend 可靠。
 
 ---
+
+### 3.5 全屏页渲染节流（2026-10-31 加，性能基线）
+
+> 背景：车机全屏播放时，同屏的悬浮视频（其他应用）被拖慢。根因不是音频也不是 Flutter，而是**原生全屏页满帧重绘吃满 SurfaceFlinger 合成预算**——窗口每帧 damage，与它同屏的其它层一起被拖慢。
+
+实测（MuMu，发布包 v2026.10.31，`dumpsys gfxinfo` 隔 20 秒取两次 `Total frames rendered` 差值）：
+
+| 阶段 | 20 秒帧数 | 帧率 | App CPU |
+|---|---|---|---|
+| 优化前（Choreographer 每帧刷新） | 1220 | **61 fps** | 116% |
+| 暂停（对照组） | 20 | 1 fps | — |
+| 第一步（三个源各自定时节流） | 605 | 30 fps | 42% |
+| 最终（统一 tick） | 427 | **21 fps** | 4% |
+
+根因三条：
+
+1. `frameCb`（Choreographer.FrameCallback）每帧写 seek/时间/歌词 → 强制 60Hz 重绘；而进度显示只到秒精度，1Hz 都够
+2. 旋转组 `discGroup` 无硬件层，组内 `cover` 反而设了 `LAYER_TYPE_HARDWARE` → 每帧多一次离屏合成 + 重采样约 528×528 盘面位图
+3. **多个刷新源若各自独立驱动，invalidate 会落在不同帧上叠加**（15+12.5+5≈32fps，实测 30fps 吻合）
+
+现行机制：
+
+- **统一 tick**（`tickMs = 66ms`，15Hz）：进度/时间/歌词/角度全部在 `tickTask` 里更新 → 同帧刷新
+- 进度/时间只在**秒变化**时才写，避免无谓 invalidate
+- 旋转**不用 ValueAnimator**（它由 AnimationHandler 每帧驱动，与 tick 不同步会额外造帧），改为 `stepRotation()` 按经过时间算角度：`(rotAnchorAngle + dt/32000f*360f) % 360f`
+- `discGroup` 设 `LAYER_TYPE_HARDWARE`，**必须放在 `startRotation()` 的早退之前**——`buildDisc()` 重建后是新的 discGroup，新对象要重新挂层
+- `cover` 的嵌套硬件层已删除
+
+剩余 21fps 的构成：15fps 基础 tick + 歌词切行时平滑滚动动画（`CarLyricView` 的 `postInvalidateOnAnimation`）的短暂爆发。再降只能动歌词滚动，会损失体验，暂不做。
+
+> 教训：①**多个刷新源必须合并到同一 tick**，否则各自节流也会叠成倍数；②判断页面是否持续重绘，用 `dumpsys gfxinfo` 差值法最快，不需要 root 与 profiler；③**暂停对照组**是证明"持续重绘"最有力的证据（1fps 说明没有隐藏的常驻渲染源）；④全屏 Activity 用不透明主题时下层 FlutterActivity 会 `onStop` 并停帧，已从 `dumpsys gfxinfo` 的窗口段确认（MainActivity 的 ViewRootImpl `visibility=8`）。
 
 ## 4. 其他 fork 侧功能
 
@@ -189,11 +220,13 @@ sleep 8; "$MM" sh -v 1 --cmd "input tap 190 260"   # 点迷你播放器封面 �
 ## 10. 待办与已知问题
 
 - [x] ~~下次发版 20265~~：**已于 2026-10-31 发布**（tag `v2026.10.31`，Release id 429646924，正文带 markdown）。
-- [ ] **下次发版 20266**：暂无待发内容；发版前按 §6 步骤（先 push 再打 tag、本地构建、apksigner 校验）。
+- [ ] **下次发版 20266**：含全屏页渲染节流（`d02b51d`，§3.5），**待车机实测悬浮视频是否恢复流畅后再 push 并发版**；发版前按 §6 步骤（先 push 再打 tag、本地构建、apksigner 校验）。
+- [ ] 若车机实测仍嫌卡：下一档可动歌词切行滚动动画频率（§3.5 末段），或把 tick 降到 12Hz（旋转每帧 0.9°，仍在可接受范围）。
 - [x] ~~领先提交精简~~：2026-10-31 做了一次「外科式压缩」15→8（保留全部 5 个 release 里程碑及其 tag；只压缩中间过程提交，tree 逐字节不变）。备份分支 `backup-pre-squash-20261031`。
 - [ ] **仓库里仍跟踪着两个 29.7 MB 的历史 APK**：`KA_Music_v2026.10.10.apk`、`KA_Music_v2026.10.10_b2.apk`（早期误提交）。建议 `git rm --cached` + 补 `.gitignore`。`.git` 已 192 MB，历史 blob 想彻底清需 git-filter-repo，但那会改动所有 tree、破坏已对齐的 release tag —— **不要做**。
 - [ ] `pkkuwo/`（第三方参考 APK，逆向唱片贴图用）已停止跟踪，但历史 blob 仍在，同上不清。
 - [ ] 黑胶观感仍属主观调优项，当前基线为 v6（§3.4）；若要再改，先渲染候选图供用户选，再动代码。
+- [ ] 性能回归检查：改动任何周期刷新逻辑后，用 §3.5 的 gfxinfo 差值法复测帧率，目标 ≤25fps。
 - [ ] Actions 免费额度常被耗尽（曾出现 "Actions has been disabled"），因此**本地构建是主路径**，CI 为备用。
 - [ ] 20263 起不再产 iOS 包；如需 iOS，要恢复 `ios-build.yml` 并重新验证。
 - [ ] 上游（`umr-xiaomai`）仍在活跃提交，定期 `git fetch upstream` 看是否有值得并入了的功能（本 fork 的播放器页与上游冲突面较大，merge 时留意 `player_page.dart` / `player_controller.dart`）。
