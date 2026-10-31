@@ -22,17 +22,17 @@
 
 ---
 
-## 2. 当前状态快照（2026-10-30）
+## 2. 当前状态快照（2026-10-31，v2026.10.31 已发版 + 提交链精简后）
 
 ```
-HEAD   = 865c0f5  docs（黑胶 v6 极简外缘，待实测发版）
+HEAD   = 最新的「docs: 交接文档快照」提交（自指，不写死 SHA）
 origin = 已同步（0/0）
-upstream/master = 落后 0、领先 11
-pubspec = version: 2026.10.29+20264   （app_config.dart 同步 appVersion/appVersionCode）
+upstream/master = 落后 0、领先 8
+pubspec = version: 2026.10.31+20265   （app_config.dart 同步 appVersion/appVersionCode）
 工作区 = 干净
 ```
 
-线上最新 Release：**v2026.10.29**（2026-10-28 发布），资产 `app-release.apk` 31.4 MB，正式签名。
+线上最新 Release：**v2026.10.31**（2026-10-31 发布，release commit `9e63193`），资产 `app-release.apk` 31,393,657 B，正式签名。
 
 已发布版本链（每个 tag = 一次发版）：
 
@@ -42,16 +42,9 @@ pubspec = version: 2026.10.29+20264   （app_config.dart 同步 appVersion/appVe
 | v2026.10.14 | 20262 | 网络兜底（等网续播 / 智能降音质）、同步上游本地歌词匹配与歌单导入 | tag→CI |
 | v2026.10.28 | 20263 | 同步上游 3.2.0/3.3.0、CI 去 iOS、`await` 编译修复、本地构建脚本 | 本地构建 + 手动发布 |
 | v2026.10.29 | 20264 | 专辑详情无歌修复、车机黑胶唱片按网易云样式复刻 | 本地构建 + 手动发布 |
+| v2026.10.31 | 20265 | 黑胶重做（深黑盘体+窄叶方向光+极简外缘）、停止跟踪 `pkkuwo/` | 本地构建 + 手动发布 |
 
-**尚未发布的 5 个提交**（下次发版即 20265）：
-
-```
-a59b110  chore(repo): 停止跟踪 pkkuwo/ 第三方参考 APK
-ae2ec9b  polish(car-player): 黑胶沟槽改真实唱片式——降密度+轨道分隔间隙+反光边界
-f27a6db  polish(car-player): 黑胶唱片真实化——去假高光带+细密低对比沟槽+双叶柔反射
-cd171d0  polish(car-player): 黑胶盘叠静态双叶镜面扫光+外缘倒角高光
-c5b87ae  polish(car-player): 黑胶对照网易云重设计——深黑盘体+窄叶方向光+极简外缘
-```
+**尚未发布的提交：无**（20265 已发，master 与 origin 同步）。
 
 相对上游的私有差异共 83 文件（+7277 / −431），大头是 `android/` 原生播放器与 `third_party/flutter_lyric/`。
 
@@ -195,7 +188,9 @@ sleep 8; "$MM" sh -v 1 --cmd "input tap 190 260"   # 点迷你播放器封面 �
 
 ## 10. 待办与已知问题
 
-- [ ] **下次发版 20265**：把 §2 列出的 5 个未发提交（黑胶 v6 + 唱片真实化 + pkkuwo 去跟踪）一并发出；`c5b87ae` 待用户车机实测确认后再 push。
+- [x] ~~下次发版 20265~~：**已于 2026-10-31 发布**（tag `v2026.10.31`，Release id 429646924，正文带 markdown）。
+- [ ] **下次发版 20266**：暂无待发内容；发版前按 §6 步骤（先 push 再打 tag、本地构建、apksigner 校验）。
+- [x] ~~领先提交精简~~：2026-10-31 做了一次「外科式压缩」15→8（保留全部 5 个 release 里程碑及其 tag；只压缩中间过程提交，tree 逐字节不变）。备份分支 `backup-pre-squash-20261031`。
 - [ ] **仓库里仍跟踪着两个 29.7 MB 的历史 APK**：`KA_Music_v2026.10.10.apk`、`KA_Music_v2026.10.10_b2.apk`（早期误提交）。建议 `git rm --cached` + 补 `.gitignore`。`.git` 已 192 MB，历史 blob 想彻底清需 git-filter-repo，但那会改动所有 tree、破坏已对齐的 release tag —— **不要做**。
 - [ ] `pkkuwo/`（第三方参考 APK，逆向唱片贴图用）已停止跟踪，但历史 blob 仍在，同上不清。
 - [ ] 黑胶观感仍属主观调优项，当前基线为 v6（§3.4）；若要再改，先渲染候选图供用户选，再动代码。
