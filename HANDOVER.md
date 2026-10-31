@@ -25,9 +25,9 @@
 ## 2. 当前状态快照（2026-10-31，v2026.10.31 已发版）
 
 ```
-HEAD   = 16c509a  release: 2026.10.31 (versionCode 20265)
+HEAD   = 5c9bf94  docs（发版后快照更新）
 origin = 已同步（0/0）
-upstream/master = 落后 0、领先 14
+upstream/master = 落后 0、领先 13
 pubspec = version: 2026.10.31+20265   （app_config.dart 同步 appVersion/appVersionCode）
 工作区 = 干净
 ```
