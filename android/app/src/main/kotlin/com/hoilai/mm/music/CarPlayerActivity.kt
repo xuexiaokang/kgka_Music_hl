@@ -1,6 +1,5 @@
 package com.hoilai.mm.music
 
-import android.animation.ValueAnimator
 import android.app.Activity
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
@@ -15,11 +14,9 @@ import android.graphics.Shader
 import android.graphics.SweepGradient
 import android.graphics.drawable.GradientDrawable
 import android.os.Bundle
-import android.view.Choreographer
 import android.view.Gravity
 import android.view.View
 import android.view.ViewOutlineProvider
-import android.view.animation.LinearInterpolator
 import android.widget.FrameLayout
 import android.widget.ImageButton
 import android.widget.ImageView
@@ -78,7 +75,12 @@ class CarPlayerActivity : Activity() {
     private lateinit var queueHandleBg: GradientDrawable
     private var sheet: FrameLayout? = null
 
-    private var rotAnimator: ValueAnimator? = null
+    // 旋转不走 ValueAnimator：它由 AnimationHandler 每帧驱动，与进度刷新的 tick 不同步，
+    // 会让 invalidate 落在额外的一批帧上（实测叠加成 30fps）。改为在 tick 里按经过时间
+    // 直接算角度，与进度/歌词共用同一次重绘。
+    private var rotRunning = false
+    private var rotAnchorUptimeMs = 0L
+    private var rotAnchorAngle = 0f
     private var lastDiscSize = -1
 
     private var anchorPosMs = 0L
@@ -121,19 +123,43 @@ class CarPlayerActivity : Activity() {
     private var thSurfaceContainerHighest = 0xFFE3E7EF.toInt()
 
     private var clockStarted = false
-    private val frameCb = object : Choreographer.FrameCallback {
-        override fun doFrame(frameTimeNanos: Long) {
-            if (!playing || seekDragging || isFinishing) {
-                clockStarted = false
-                return
-            }
+    private var lastShownSec = -1L
+
+    // 渲染节流（车机弱 GPU：全屏页每帧重绘会占满 SurfaceFlinger 合成预算，连累同屏悬浮视频）
+    // 关键：**所有**周期性更新必须走同一个 tick。实测若进度(5Hz)/歌词(12.5Hz)/旋转(15Hz)
+    // 各自用独立的定时/动画驱动，三者的 invalidate 会落在不同的帧上叠加成 ~32fps；
+    // 合并到单个 15Hz tick 后同帧刷新，页面稳定 15fps。
+    private val tickMs = 66L
+    private val tickHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private val tickTask = object : Runnable {
+        override fun run() {
+            // 自停时同步复位标志，避免 stopClock 未走到时 startClock 误判为“已在运行”
+            if (!playing || isFinishing) { clockStarted = false; return }
             val cur = currentMs()
-            seek.progress = cur.toInt()
-            elapsedText.text = fmt(cur)
-            remainText.text = fmt(durationMs)
+            // 进度条/时间只到秒精度：秒未变就不碰它，避免无谓的 invalidate
+            val sec = cur / 1000
+            if (!seekDragging && sec != lastShownSec) {
+                lastShownSec = sec
+                seek.progress = cur.toInt()
+                elapsedText.text = fmt(cur)
+                remainText.text = fmt(durationMs)
+            }
             if (!lyricView.userInteracting) lyricView.setProgress(cur)
-            Choreographer.getInstance().postFrameCallback(this)
+            stepRotation()
+            if (playing) tickHandler.postDelayed(this, tickMs)
         }
+    }
+
+    private fun startClock() {
+        if (clockStarted) return
+        clockStarted = true
+        lastShownSec = -1L
+        tickHandler.post(tickTask)
+    }
+
+    private fun stopClock() {
+        clockStarted = false
+        tickHandler.removeCallbacks(tickTask)
     }
 
     private fun dp(v: Float) = (v * resources.displayMetrics.density)
@@ -163,9 +189,8 @@ class CarPlayerActivity : Activity() {
 
     override fun onDestroy() {
         if (CarPlayerBridge.current === this) CarPlayerBridge.current = null
-        rotAnimator?.cancel()
-        Choreographer.getInstance().removeFrameCallback(frameCb)
-        clockStarted = false
+        stopRotation()
+        stopClock()
         super.onDestroy()
     }
 
@@ -460,8 +485,8 @@ class CarPlayerActivity : Activity() {
 
         val cover = ImageView(this).apply {
             // 圆形封面在位图里预抗锯齿(circleize)，故不再用 clipToOutline 硬裁(硬裁边缘有锯齿)
+            // 不再单独设硬件层：旋转组整体已设层，组内再套层会多一次离屏合成
             scaleType = ImageView.ScaleType.FIT_XY
-            setLayerType(View.LAYER_TYPE_HARDWARE, null)
         }
         disc = cover
         val coverSize = (sizePx * 0.585f).toInt()
@@ -1391,14 +1416,10 @@ class CarPlayerActivity : Activity() {
         playBtn.setImageResource(if (isPlaying) R.drawable.ic_kg_pause else R.drawable.ic_kg_play)
         if (isPlaying) {
             startRotation()
-            if (!clockStarted) {
-                clockStarted = true
-                Choreographer.getInstance().postFrameCallback(frameCb)
-            }
+            startClock()
         } else {
             stopRotation()
-            clockStarted = false
-            Choreographer.getInstance().removeFrameCallback(frameCb)
+            stopClock()
         }
     }
 
@@ -1412,27 +1433,25 @@ class CarPlayerActivity : Activity() {
         // discGroup 由 buildDisc() 在布局完成后创建；onCreate 期间的同步调用（applyPlayState）
         // 会早于该时机，此时直接跳过——buildDisc() 末尾会在 playing 时重新触发旋转。
         if (!::discGroup.isInitialized) return
-        if (rotAnimator?.isRunning == true) return
-        rotAnimator = ValueAnimator.ofFloat(0f, 360f).apply {
-            duration = 32000L
-            repeatCount = ValueAnimator.INFINITE
-            interpolator = LinearInterpolator()
-            // 32s 转一圈极慢,30fps 已足够顺;把角度更新节流到 ~30fps,减少旋转硬件层的变换刷新(降 GPU)
-            var last = 0L
-            addUpdateListener {
-                val now = android.os.SystemClock.uptimeMillis()
-                if (now - last >= 33L) {
-                    last = now
-                    discGroup.rotation = it.animatedValue as Float
-                }
-            }
-            start()
-        }
+        // 旋转组整体缓存为硬件层:此后每帧只是矩阵变换,不再重采样盘面位图与中心封面。
+        // (原先组无层、组内 cover 反而有层,等于每帧多一次离屏合成,是车机上的主要 GPU 开销)
+        // 必须放在早退之前:buildDisc() 重建后会换一个新的 discGroup,新对象需要重新挂层。
+        discGroup.setLayerType(View.LAYER_TYPE_HARDWARE, null)
+        if (rotRunning) return
+        rotRunning = true
+        rotAnchorUptimeMs = android.os.SystemClock.uptimeMillis()
+        rotAnchorAngle = discGroup.rotation
+    }
+
+    /** 按经过时间直接算角度(32s/圈),与 tick 同频——一次 tick 只产生一次重绘。 */
+    private fun stepRotation() {
+        if (!rotRunning || !::discGroup.isInitialized) return
+        val dt = android.os.SystemClock.uptimeMillis() - rotAnchorUptimeMs
+        discGroup.rotation = (rotAnchorAngle + (dt / 32000f) * 360f) % 360f
     }
 
     private fun stopRotation() {
-        rotAnimator?.cancel()
-        rotAnimator = null
+        rotRunning = false
     }
 
     private fun setDefaultBackground() {
