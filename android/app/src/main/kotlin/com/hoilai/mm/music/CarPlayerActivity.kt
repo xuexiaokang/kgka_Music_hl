@@ -9,8 +9,10 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Matrix
 import android.graphics.Paint
+import android.graphics.Path
 import android.graphics.RadialGradient
 import android.graphics.Shader
+import android.graphics.SweepGradient
 import android.graphics.drawable.GradientDrawable
 import android.os.Bundle
 import android.view.Choreographer
@@ -442,7 +444,7 @@ class CarPlayerActivity : Activity() {
     private fun lpWeight(weight: Float): LinearLayout.LayoutParams =
         LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, weight)
 
-    /** 网易云风黑胶：细密同心沟槽盘体 + 中心封面(约50%) + 静态高光 + 中心轴孔；盘体随 discGroup 旋转。 */
+    /** 网易云风黑胶：细密沟槽盘体 + 中心封面(0.585R) + 静态方向光感/边缘亮弧；盘体随 discGroup 旋转。 */
     private fun buildDisc(sizePx: Int) {
         discWrap.removeAllViews()
 
@@ -462,45 +464,17 @@ class CarPlayerActivity : Activity() {
             setLayerType(View.LAYER_TYPE_HARDWARE, null)
         }
         disc = cover
-        val coverSize = (sizePx * 0.64f).toInt()
+        val coverSize = (sizePx * 0.585f).toInt()
         discGroup.addView(cover, FrameLayout.LayoutParams(coverSize, coverSize, Gravity.CENTER))
 
         discWrap.addView(discGroup, FrameLayout.LayoutParams(sizePx, sizePx, Gravity.CENTER))
 
-        // 静态光泽层(不随盘旋转,模拟固定光源下的胶片反光):
-        // ① 左上环境柔光 ② 一道斜向镜面高光带(中间亮、两端渐隐)
-        val glossAmbient = View(this).apply {
-            background = GradientDrawable().apply {
-                shape = GradientDrawable.OVAL
-                gradientType = GradientDrawable.RADIAL_GRADIENT
-                setGradientCenter(0.34f, 0.28f)
-                gradientRadius = sizePx * 0.8f
-                setColors(intArrayOf(0x24FFFFFF, 0x0AFFFFFF, 0x00FFFFFF))
-            }
+        // 静态光泽层(不随盘旋转):大尺度方向光感 + 外缘斜面受光亮弧
+        val conicSheen = ImageView(this).apply {
+            setImageBitmap(makeSheenBitmap(sizePx))
+            scaleType = ImageView.ScaleType.FIT_XY
         }
-        discWrap.addView(glossAmbient, FrameLayout.LayoutParams(sizePx, sizePx, Gravity.CENTER))
-
-        val glossSheen = View(this).apply {
-            background = GradientDrawable().apply {
-                shape = GradientDrawable.RECTANGLE
-                gradientType = GradientDrawable.LINEAR_GRADIENT // 默认水平(左→右)
-                setColors(
-                    intArrayOf(
-                        0x00FFFFFF, 0x00FFFFFF, 0x22FFFFFF, 0x4DFFFFFF,
-                        0x22FFFFFF, 0x00FFFFFF, 0x00FFFFFF
-                    ),
-                    floatArrayOf(0f, 0.30f, 0.44f, 0.52f, 0.60f, 0.74f, 1f)
-                )
-            }
-            rotation = 45f // 整层斜置得到斜向高光带(圆形裁剪旋转后仍是正圆)
-            outlineProvider = object : ViewOutlineProvider() {
-                override fun getOutline(view: View, outline: android.graphics.Outline) {
-                    outline.setOval(0, 0, view.width, view.height)
-                }
-            }
-            clipToOutline = true
-        }
-        discWrap.addView(glossSheen, FrameLayout.LayoutParams(sizePx, sizePx, Gravity.CENTER))
+        discWrap.addView(conicSheen, FrameLayout.LayoutParams(sizePx, sizePx, Gravity.CENTER))
 
         // 左右滑动切歌（对齐 Flutter _LandscapeArtworkShowcase.onHorizontalDragEnd）
         val discGesture = android.view.GestureDetector(this,
@@ -525,63 +499,135 @@ class CarPlayerActivity : Activity() {
         if (playing) startRotation()
     }
 
-    /** 生成网易云风黑胶盘体位图(参数取自反编译网易云车机版唱片贴图 ap9.png 实测)。 */
+    /** 生成网易云风黑胶盘体位图(2x 超采样防摩尔纹;只画径向对称元素——底色/沟槽/暗侧面,随盘旋转)。 */
     private fun makeVinylBitmap(size: Int): Bitmap {
+        // 2x 超采样:细沟槽按 1x 直接画会与像素网格共振产生摩尔纹/水波纹,先画大图再缩小
+        val ss = (size * 2).coerceAtMost(2048)
+        val big = Bitmap.createBitmap(ss, ss, Bitmap.Config.ARGB_8888)
+        val c = Canvas(big)
+        val cx = ss / 2f
+        val cy = ss / 2f
+        val r = ss / 2f
+
+        // 深黑盘体(v5):真黑胶盘面是近纯黑,原 1B/12/0A 偏灰被实测否决
+        val base = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            shader = RadialGradient(
+                cx, cy, r,
+                intArrayOf(0xFF0E0E11.toInt(), 0xFF0A0A0C.toInt(), 0xFF060608.toInt()),
+                floatArrayOf(0f, 0.7f, 1f), Shader.TileMode.CLAMP
+            )
+        }
+        c.drawCircle(cx, cy, r, base)
+
+        // 同心沟槽:网易云贴图是细密、隐约可见的纹理(55 条,单条极细,低对比);
+        // "亮区里沟槽更明显"的效果由静态 sheen 层的方向光完成,这里保持径向对称
+        val groove = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            strokeWidth = (ss * 0.0016f).coerceAtLeast(1f)
+        }
+        val inner = r * 0.645f
+        val outer = r * 0.955f
+        val rings = 55
+        val step = (outer - inner) / rings
+        var rr = inner
+        var i = 0
+        while (i <= rings) {
+            groove.color = if (i % 2 == 0) 0x0EFFFFFF else 0x14000000
+            c.drawCircle(cx, cy, rr, groove)
+            rr += step
+            i++
+        }
+
+        // 最外暗侧面(v6b 极简边):收窄到 0.99R~R 且强度减半,
+        // 原宽暗带被实测判"外圈大边不和谐"
+        val sideBand = Path().apply {
+            addCircle(cx, cy, r, Path.Direction.CW)
+            addCircle(cx, cy, r * 0.99f, Path.Direction.CW)
+            fillType = Path.FillType.EVEN_ODD
+        }
+        c.save()
+        c.clipPath(sideBand)
+        c.drawColor(0x4D000000.toInt())
+        c.restore()
+
+        // 标签孔外的细暗环:把中心封面与黑胶盘体分出一圈边界
+        val labelDark = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            strokeWidth = (ss * 0.01f).coerceAtLeast(1f)
+            color = 0x66000000
+        }
+        c.drawCircle(cx, cy, r * 0.60f, labelDark)
+
+        // 最外硬收边
+        val rim = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            strokeWidth = (ss * 0.004f).coerceAtLeast(1f)
+            color = 0xFF060607.toInt()
+        }
+        c.drawCircle(cx, cy, r - rim.strokeWidth / 2f, rim)
+
+        // 缩回目标尺寸(FILTER_BITMAP 双线性,顺带抗锯齿)
+        val bmp = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
+        Canvas(bmp).drawBitmap(
+            big, null,
+            android.graphics.RectF(0f, 0f, size.toFloat(), size.toFloat()),
+            Paint(Paint.FILTER_BITMAP_FLAG or Paint.ANTI_ALIAS_FLAG)
+        )
+        big.recycle()
+        return bmp
+    }
+
+    /** 生成静态光泽层(透明底,不随盘旋转):大尺度方向光感 + 外缘斜面受光亮弧。 */
+    private fun makeSheenBitmap(size: Int): Bitmap {
         val bmp = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
         val c = Canvas(bmp)
         val cx = size / 2f
         val cy = size / 2f
         val r = size / 2f
 
-        // 近黑盘体(径向对称;方向性柔光由不旋转的 gloss 层叠加,故此处不加高光带)
-        val base = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            shader = RadialGradient(
-                cx, cy, r,
-                intArrayOf(0xFF1B1B1F.toInt(), 0xFF121215.toInt(), 0xFF0A0A0C.toInt()),
-                floatArrayOf(0f, 0.7f, 1f), Shader.TileMode.CLAMP
-            )
-        }
-        c.drawCircle(cx, cy, r, base)
+        // 1) 窄叶方向光感(v5):原宽叶覆盖大半圆导致整面发灰;现收窄到 ±55°,
+        //    半宽处平滑归零,其余角度全透明——大部分盘面保持纯黑
+        val glowSweep = SweepGradient(
+            cx, cy,
+            intArrayOf(
+                0x26FFFFFF, 0x13FFFFFF, 0x00FFFFFF,
+                0x00FFFFFF, 0x13FFFFFF, 0x26FFFFFF
+            ),
+            floatArrayOf(0f, 0.0765f, 0.153f, 0.847f, 0.9235f, 1f)
+        )
+        glowSweep.setLocalMatrix(Matrix().apply { setRotate(-125f, cx, cy) })
+        c.save()
+        c.clipPath(
+            Path().apply {
+                addCircle(cx, cy, r, Path.Direction.CW)
+                addCircle(cx, cy, r * 0.60f, Path.Direction.CW)
+                fillType = Path.FillType.EVEN_ODD
+            }
+        )
+        c.drawCircle(cx, cy, r, Paint(Paint.ANTI_ALIAS_FLAG).apply { shader = glowSweep })
+        c.restore()
 
-        // 同心沟槽:加强对比让纹路清晰可见(0.65R~0.99R,约34道)
-        val groove = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            style = Paint.Style.STROKE
-            strokeWidth = (size * 0.0032f).coerceAtLeast(1f)
-        }
-        val inner = r * 0.65f
-        val outer = r * 0.99f
-        val rings = 34
-        val step = (outer - inner) / rings
-        var rr = inner
-        var i = 0
-        while (i < rings) {
-            groove.color = if (i % 2 == 0) 0x2EFFFFFF else 0x66000000
-            c.drawCircle(cx, cy, rr, groove)
-            rr += step
-            i++
-        }
-
-        // 标签孔外的细暗环:把中心封面与黑胶盘体分出一圈边界
-        val labelDark = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            style = Paint.Style.STROKE
-            strokeWidth = (size * 0.01f).coerceAtLeast(1f)
-            color = 0x66000000
-        }
-        c.drawCircle(cx, cy, r * 0.635f, labelDark)
-
-        // 外缘:仅一丝极淡反光 + 最外暗收边(网易云盘边是干净暗边,无强高光)
-        val rimFaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            style = Paint.Style.STROKE
-            strokeWidth = (size * 0.006f).coerceAtLeast(1f)
-            color = 0x14FFFFFF
-        }
-        c.drawCircle(cx, cy, r * 0.985f, rimFaint)
-        val rim = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            style = Paint.Style.STROKE
-            strokeWidth = (size * 0.01f).coerceAtLeast(1f)
-            color = 0xFF060607.toInt()
-        }
-        c.drawCircle(cx, cy, r - rim.strokeWidth / 2f, rim)
+        // 2) 外缘斜面受光亮弧(v6b 极简边):峰值 0x30→0x16,带收窄到
+        //    0.955R~0.985R,仅受光侧 ±75°;上一版宽亮带被判不和谐
+        val bevelSweep = SweepGradient(
+            cx, cy,
+            intArrayOf(
+                0x16FFFFFF, 0x0BFFFFFF, 0x00FFFFFF,
+                0x00FFFFFF, 0x0BFFFFFF, 0x16FFFFFF
+            ),
+            floatArrayOf(0f, 0.104f, 0.208f, 0.792f, 0.896f, 1f)
+        )
+        bevelSweep.setLocalMatrix(Matrix().apply { setRotate(-125f, cx, cy) })
+        c.save()
+        c.clipPath(
+            Path().apply {
+                addCircle(cx, cy, r * 0.985f, Path.Direction.CW)
+                addCircle(cx, cy, r * 0.955f, Path.Direction.CW)
+                fillType = Path.FillType.EVEN_ODD
+            }
+        )
+        c.drawCircle(cx, cy, r, Paint(Paint.ANTI_ALIAS_FLAG).apply { shader = bevelSweep })
+        c.restore()
 
         return bmp
     }
