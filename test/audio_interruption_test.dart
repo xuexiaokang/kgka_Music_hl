@@ -87,6 +87,10 @@ class _Player extends Fake implements AudioPlayer {
   Stream<ProcessingState> get processingStateStream => processing.stream;
   @override
   Stream<int?> get androidAudioSessionIdStream => const Stream.empty();
+  // 本 fork 的 PlayerController 构造会订阅 errorStream 做播放期错误自动恢复，
+  // Fake 必须补齐该方法，否则 noSuchMethod 抛 UnimplementedError 连环失败。
+  @override
+  Stream<PlayerException> get errorStream => const Stream.empty();
   @override
   Duration get position => Duration.zero;
   @override

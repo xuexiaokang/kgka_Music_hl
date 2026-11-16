@@ -23,6 +23,9 @@ class _IdlePlayer extends Fake implements AudioPlayer {
   Stream<ProcessingState> get processingStateStream => const Stream.empty();
   @override
   Stream<int?> get androidAudioSessionIdStream => const Stream.empty();
+  // 本 fork 的 PlayerController 构造会订阅 errorStream 做播放期错误自动恢复。
+  @override
+  Stream<PlayerException> get errorStream => const Stream.empty();
   @override
   int? get androidAudioSessionId => null;
   @override

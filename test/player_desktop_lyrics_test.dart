@@ -96,6 +96,22 @@ void main() {
       );
       await tester.pumpAndSettle();
 
+      if (carMode) {
+        // 本 fork：车机横屏全屏由原生 CarPlayerActivity 接管，Flutter 侧只渲染
+        // 纯黑宿主（不渲染 Flutter 版播放页，无「更多」菜单），桌面歌词等菜单
+        // 交互在原生页实现。此处仅验证黑宿主稳定存在、不崩溃、不误触关闭。
+        expect(find.byType(PlayerPage), findsOneWidget);
+        expect(tester.takeException(), isNull);
+        expect(closeRequests, 0);
+        await tester.pumpWidget(const SizedBox.shrink());
+        player.dispose();
+        auth.dispose();
+        theme.dispose();
+        client.close();
+        await tester.pump();
+        return;
+      }
+
       for (final enabled in [true, false]) {
         await tester.tap(find.byTooltip('更多').first);
         await tester.pumpAndSettle();
