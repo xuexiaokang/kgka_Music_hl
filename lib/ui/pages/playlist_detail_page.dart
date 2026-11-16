@@ -16,6 +16,8 @@ import '../../models/music_models.dart';
 import '../../services/cache_service.dart';
 import '../../services/music_api.dart';
 import '../widgets/artwork.dart';
+import '../widgets/expandable_intro.dart';
+import '../widgets/favorite_button.dart';
 import '../widgets/song_artwork.dart';
 import '../widgets/import_playlist_sheet.dart';
 import '../widgets/mini_player.dart';
@@ -61,6 +63,7 @@ class _PlaylistDetailPageState extends State<PlaylistDetailPage> {
   final _cache = CacheService();
 
   PlaylistSummary? _info;
+  AlbumDetail? _albumDetail;
   var _nextPage = 1;
   var _hasMore = true;
   var _isInitialLoading = true;
@@ -162,6 +165,18 @@ class _PlaylistDetailPageState extends State<PlaylistDetailPage> {
   }
 
   bool get _isStaticCollection => widget.initialSongs != null;
+
+  /// 当前页面歌曲列表对应的队列来源，供重启后重建队列使用。
+  QueueOrigin? get _currentQueueOrigin {
+    // 静态歌单（如搜索结果、最近播放）没有稳定的远端来源，不记录
+    if (_isStaticCollection) return null;
+    final title = _info?.title ?? widget.playlist.title;
+    if (_isAlbum) {
+      final albumId = widget.playlist.albumId ?? widget.playlist.id;
+      return QueueOrigin.album(id: albumId, title: title);
+    }
+    return QueueOrigin.playlist(id: widget.playlist.id, title: title);
+  }
 
   bool get _isAlbum => !_isStaticCollection && widget.playlist.isCollectedAlbum;
 
@@ -439,7 +454,11 @@ class _PlaylistDetailPageState extends State<PlaylistDetailPage> {
   }
 
   Future<void> _playFromVisibleQueue(Song song, List<Song> startedQueue) async {
-    await widget.player.playSong(song, queue: startedQueue);
+    await widget.player.playSong(
+      song,
+      queue: startedQueue,
+      origin: _currentQueueOrigin,
+    );
     if (!mounted) return;
     _showPlaybackErrorIfNeeded();
 
@@ -477,6 +496,27 @@ class _PlaylistDetailPageState extends State<PlaylistDetailPage> {
     Toast.error('播放失败：$message');
   }
 
+  /// 专辑详情：补全封面与介绍。
+  ///
+  /// 专辑列表项（歌手页 / 搜索结果）的封面字段常常残缺，介绍也完全没有，
+  /// 这里单独拉一次 `/album/detail`。失败时保持列表项原样，不影响曲目加载。
+  Future<AlbumDetail?> _loadAlbumDetail(String albumId) async {
+    try {
+      final detail = await widget.api.albumDetail(albumId);
+      if (!mounted) return detail;
+      setState(() {
+        _albumDetail = detail;
+        final base = _info ?? widget.playlist;
+        if (detail.coverUrl != null) {
+          _info = base.copyWithCover(detail.coverUrl);
+        }
+      });
+      return detail;
+    } catch (_) {
+      return null;
+    }
+  }
+
   Future<void> _loadInitial() async {
     setState(() {
       _isInitialLoading = true;
@@ -486,6 +526,7 @@ class _PlaylistDetailPageState extends State<PlaylistDetailPage> {
       _nextPage = 1;
       _hasMore = true;
       _info = null;
+      _albumDetail = null;
       _songs.clear();
     });
 
@@ -543,6 +584,10 @@ class _PlaylistDetailPageState extends State<PlaylistDetailPage> {
 
     try {
       if (_isAlbum) {
+        final albumId = widget.playlist.albumId ?? widget.playlist.id;
+        // 专辑介绍（/album/detail）可能明显慢于歌曲列表，独立加载：
+        // _loadAlbumDetail 内部自行 setState 更新封面与介绍，不阻塞曲目展示。
+        unawaited(_loadAlbumDetail(albumId));
         final songs = await _refreshSongsOnEntry();
         if (!mounted) return;
 
@@ -1298,6 +1343,14 @@ class _PlaylistDetailPageState extends State<PlaylistDetailPage> {
                         ),
                       )
                     else ...[
+                      if (_albumDetail?.intro?.trim() case final intro?
+                          when intro.isNotEmpty)
+                        SliverToBoxAdapter(
+                          child: ExpandableIntroCard(
+                            title: '专辑介绍',
+                            text: intro,
+                          ),
+                        ),
                       SliverToBoxAdapter(
                         child: _Actions(
                           count: _allSongsLoaded
@@ -1346,6 +1399,7 @@ class _PlaylistDetailPageState extends State<PlaylistDetailPage> {
                                 song: song,
                                 index: index + 1,
                                 player: widget.player,
+                                auth: widget.auth,
                                 canDelete: _canEdit,
                                 selectionMode: _selectionMode,
                                 selected: _selectedHashes.contains(song.hash),
@@ -1931,6 +1985,7 @@ class _SongRow extends StatelessWidget {
     required this.song,
     required this.index,
     required this.player,
+    required this.auth,
     required this.canDelete,
     required this.onTap,
     required this.onAddToPlaylist,
@@ -1944,6 +1999,7 @@ class _SongRow extends StatelessWidget {
   final Song song;
   final int index;
   final PlayerController player;
+  final AuthController auth;
   final bool canDelete;
   final VoidCallback onTap;
   final VoidCallback onAddToPlaylist;
@@ -2102,6 +2158,13 @@ class _SongRow extends StatelessWidget {
                       fontWeight: FontWeight.w600,
                     ),
                   ),
+                  if (!selectionMode)
+                    FavoriteIconButton(
+                      song: song,
+                      auth: auth,
+                      size: 38,
+                      iconSize: 19,
+                    ),
                   if (!selectionMode)
                     IconButton(
                       tooltip: '更多',

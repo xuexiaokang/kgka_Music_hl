@@ -28,6 +28,7 @@ import '../widgets/blurred_lyric_view.dart';
 import '../widgets/retryable_network_image.dart';
 import '../widgets/playback_speed_sheet.dart';
 import '../widgets/sleep_timer_sheet.dart';
+import '../widgets/favorite_button.dart';
 import '../widgets/song_action_sheets.dart';
 import '../widgets/toast.dart';
 import '../widgets/marquee_text.dart';
@@ -158,6 +159,7 @@ class _PlayerPageState extends State<PlayerPage> {
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                   ),
+                  trailing: FavoriteIconButton(song: song, auth: widget.auth),
                   onTap: () {
                     Navigator.of(context).pop();
                     widget.player.playSong(
@@ -1549,7 +1551,7 @@ class _TopBar extends StatelessWidget {
           icon: Icons.info_outline_rounded,
           title: '详细信息',
           subtitle: '专辑、发行年份、时长、音源',
-          onTap: () => openSongDetailPage(context, song),
+          onTap: () => openSongDetailPage(context, song, api: player.api),
         ),
         if (supportsComments(song))
           SongSheetAction(
