@@ -22,25 +22,39 @@
 
 ---
 
-## 2. 当前状态快照（2026-11-16，已合并上游 60bd37d，未发版）
+## 2. 当前状态快照（2026-11-16 晚，已二次合并上游 60a5f04，未发版）
 
 ```
-HEAD   = merge: 同步上游 60bd37d（dd05918）+ chore(lock) 5d5ace6
-origin = 本地领先 14（20265 之后的 perf / docs / merge / lock 均未 push）
-upstream/master = 落后 0、领先 11
-pubspec = version: 2026.10.31+20265   （下次发版改 2026.11.16+20266）
-工作区 = 干净
+HEAD   = 2a49664 test: 适配上游新测试（194 全过）
+origin = 已同步（0/0）
+upstream/master = 落后 0、领先 18（全部已 push，不可再 squash——§7.3）
+pubspec = version: 2026.11.16+20266   （准发版，tag 未打）
+工作区 = 干净；最终 APK md5 8c26fbdc…（25.2MB，正式签名）
 ```
 
-**2026-11-16 上游合并记录**：上游 10 个提交（收藏按钮含系统媒体通知、排行榜页、播放进度恢复/队列重建/搜索竞态修复、Windows 构建工作流）。冲突仅 2 处，均按 fork 意图解决：
+**领先上游 18 个提交的结构**（5 个 release 里程碑 + 4 个 merge + 9 个功能/修复）：
 
-- `music_api.dart` 的 `albumSongs`：同时保留本 fork 的 `fetchAll` 语义与上游「大 pageSize 自动拆页」语义（`playlist_detail_page` 传 `fetchAll:true`，上游 `player_controller` 传 `pageSize:5000`，两者都可用）
-- `ios-build.yml`（delete/modify）：恢复文件以消除结构性冲突，但触发条件改为仅 `workflow_dispatch`
-- 本 fork 决策：`ios-build.yml` 与新增的 `windows-build.yml` 均改为仅手动触发（macOS 10x / Windows 2x 计费 + 产物挤占 Actions 500MB 配额）；`flutter-ci.yml` 保持无 push 触发
-- 上游开启 **R8 fullMode + shrinkResources**：原生层全部为 `R.drawable.*` 静态引用、无反射，且 `proguard-rules.pro` 已含 `-keep class com.hoilai.mm.music.** { *; }`，构建通过，APK **31.4 MB → 25.2 MB**（-20%）
+| 类别 | 提交 |
+|---|---|
+| release 里程碑（带 tag，绝不可改写） | `fdad8bd`(20261) → `2167769`(20262) → `bd9adc7`(20263) → `c159f35`(20264) → `9e63193`(20265) |
+| merge 上游 | `25e6903` → `dd05918`(60bd37d) → `5757ff1`(ced8c47) → `330c506`(60a5f04) |
+| 功能/性能 | `d02b51d` 渲染节流（61→21fps）→ `bec1aa8` 黑胶 v6 + 停跟踪 pkkuwo → `49066eb` 停跟踪旧 APK → `2a49664` 测试适配 |
+| release 准备 | `3773922` 版本号 20266 |
+| docs/chore | `62121c1`/`ce9b2d3`/`63347d1` 交接文档、`5d5ace6` lock 刷新 |
 
+> 这 18 个全部已 push 到 origin。**不要再做「领先 N 就压缩」**：squash 必须 force-push，
+> 违反 §7.3（改写已发布历史 + 破坏 5 个 release tag + 摚乱与 upstream 的 merge 基准）。
+> GitHub 显示「领先 18」无任何实际代价。上游活跃期「落后」提示会反复出现，属正常。
 
-线上最新 Release：**v2026.10.31**（2026-10-31 发布，release commit `9e63193`），资产 `app-release.apk` 31,393,657 B，正式签名。
+**2026-11-16 上游合并记录（两批，共 21 个上游提交）**：
+
+1. **60bd37d**（10 提交）：收藏按钮含系统媒体通知、排行榜页、播放恢复/队列重建/搜索竞态修复、R8 开启。冲突 2 处：`albumSongs` 双语义并存（`fetchAll:true` 与 `pageSize:5000` 都可用）；`ios-build.yml` 恢复+改手动触发。
+2. **60a5f04**（11 提交）：来电打断误恢复（#175）、蓝牙断开防外放、桌面歌词黑屏（#174）、车载蓝牙歌词标题同步（#166）、下载元数据（#176）。冲突仅 update.md；上游 30 个新测试在 fork 挂（Fake 缺 `errorStream` stub、车机黑宿主架构），已适配。
+
+- CI 决策：`ios/windows-build.yml` 仅手动触发（计费 + 配额）；`flutter-ci.yml` 无 push 触发。
+- R8 fullMode + shrinkResources 开启：APK **31.4 MB → 25.2 MB**（-20%），原生层静态引用安全。
+
+线上最新 Release：**v2026.10.31**（2026-10-31 发布，release commit `9e63193`），资产 `app-release.apk` 31,393,657 B，正式签名。**v2026.11.16（20266）待车机实测悬浮视频后发布**。
 
 已发布版本链（每个 tag = 一次发版）：
 
@@ -230,13 +244,12 @@ sleep 8; "$MM" sh -v 1 --cmd "input tap 190 260"   # 点迷你播放器封面 �
 ## 10. 待办与已知问题
 
 - [x] ~~下次发版 20265~~：**已于 2026-10-31 发布**（tag `v2026.10.31`，Release id 429646924，正文带 markdown）。
-- [ ] **下次发版 20266**（版本号 `2026.11.16+20266`）：含 ①全屏页渲染节流（`d02b51d`，§3.5）②上游合并（收藏/排行榜/播放恢复，`dd05918`）③R8 裁剪（APK 25.2 MB）。发版前按 §6 步骤（先 push 再打 tag、本地构建、apksigner 校验）。
-- [ ] **合并后必须实测**（R8 首开，风险点）：车机原生全屏页资源与类是否完好、音频播放正常、收藏按钮与系统媒体通知收藏、排行榜页。
-- [ ] 渲染节流仍需车机实测悬浮视频是否恢复流畅；未通过则降 tick 至 12Hz（旋转每帧 0.9°）。
+- [ ] **下次发版 20266**（版本号 `2026.11.16+20266`，提交 `3773922`）：含 ①全屏页渲染节流（`d02b51d`，§3.5）②两批上游合并（`dd05918`+`5757ff1`+`330c506`：收藏/排行榜/R8/打断修复/蓝牙防外放/下载元数据）③R8 裁剪（APK 25.2 MB）。master 已 push（`2a49664`），剩：打 tag `v2026.11.16` → 本地构建（md5 `8c26fbdc…`）→ 发 Release。**发版门：真车机实测悬浮视频流畅 + 来电/蓝牙断开行为**。
+- [x] ~~合并后 MuMu 实测（R8 首开风险点）~~：2026-11-16 于车机实例（Android 15）冒烟全部通过——冷启 968ms、Flutter 分栏首页/排行榜/专辑详情正常、原生全屏页黑胶/歌词/控制完整、收藏变实心、帧率 19.5fps、无崩溃。详见 `memory/2026-11-16.md`。
+- [ ] 渲染节流仍需**真车机**实测悬浮视频是否恢复流畅（MuMu 19.5fps 已验证节流生效）；未通过则降 tick 至 12Hz（旋转每帧 0.9°）。
 - [ ] 若车机实测仍嫌卡：下一档可动歌词切行滚动动画频率（§3.5 末段），或把 tick 降到 12Hz（旋转每帧 0.9°，仍在可接受范围）。
 - [x] ~~领先提交精简~~：2026-10-31 做了一次「外科式压缩」15→8（保留全部 5 个 release 里程碑及其 tag；只压缩中间过程提交，tree 逐字节不变）。备份分支 `backup-pre-squash-20261031`。
-- [ ] **仓库里仍跟踪着两个 29.7 MB 的历史 APK**：`KA_Music_v2026.10.10.apk`、`KA_Music_v2026.10.10_b2.apk`（早期误提交）。建议 `git rm --cached` + 补 `.gitignore`。`.git` 已 192 MB，历史 blob 想彻底清需 git-filter-repo，但那会改动所有 tree、破坏已对齐的 release tag —— **不要做**。
-- [ ] `pkkuwo/`（第三方参考 APK，逆向唱片贴图用）已停止跟踪，但历史 blob 仍在，同上不清。
+- [x] ~~仓库里仍跟踪着两个 29.7 MB 的历史 APK~~：2026-11-16 已 `git rm --cached`（`49066eb`）。历史 blob 仍在，彻底清需 git-filter-repo —— **不要做**（破坏 release tag）。
 - [ ] 黑胶观感仍属主观调优项，当前基线为 v6（§3.4）；若要再改，先渲染候选图供用户选，再动代码。
 - [ ] 性能回归检查：改动任何周期刷新逻辑后，用 §3.5 的 gfxinfo 差值法复测帧率，目标 ≤25fps。
 - [ ] Actions 免费额度常被耗尽（曾出现 "Actions has been disabled"），因此**本地构建是主路径**，CI 为备用。
