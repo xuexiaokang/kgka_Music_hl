@@ -22,15 +22,23 @@
 
 ---
 
-## 2. 当前状态快照（2026-10-31，v2026.10.31 已发版 + 提交链精简后）
+## 2. 当前状态快照（2026-11-16，已合并上游 60bd37d，未发版）
 
 ```
-HEAD   = 最新的「docs: 交接文档快照」提交（自指，不写死 SHA）
-origin = 已同步（0/0）
-upstream/master = 落后 0、领先 10
-pubspec = version: 2026.10.31+20265   （app_config.dart 同步 appVersion/appVersionCode）
+HEAD   = merge: 同步上游 60bd37d（dd05918）+ chore(lock) 5d5ace6
+origin = 本地领先 14（20265 之后的 perf / docs / merge / lock 均未 push）
+upstream/master = 落后 0、领先 11
+pubspec = version: 2026.10.31+20265   （下次发版改 2026.11.16+20266）
 工作区 = 干净
 ```
+
+**2026-11-16 上游合并记录**：上游 10 个提交（收藏按钮含系统媒体通知、排行榜页、播放进度恢复/队列重建/搜索竞态修复、Windows 构建工作流）。冲突仅 2 处，均按 fork 意图解决：
+
+- `music_api.dart` 的 `albumSongs`：同时保留本 fork 的 `fetchAll` 语义与上游「大 pageSize 自动拆页」语义（`playlist_detail_page` 传 `fetchAll:true`，上游 `player_controller` 传 `pageSize:5000`，两者都可用）
+- `ios-build.yml`（delete/modify）：恢复文件以消除结构性冲突，但触发条件改为仅 `workflow_dispatch`
+- 本 fork 决策：`ios-build.yml` 与新增的 `windows-build.yml` 均改为仅手动触发（macOS 10x / Windows 2x 计费 + 产物挤占 Actions 500MB 配额）；`flutter-ci.yml` 保持无 push 触发
+- 上游开启 **R8 fullMode + shrinkResources**：原生层全部为 `R.drawable.*` 静态引用、无反射，且 `proguard-rules.pro` 已含 `-keep class com.hoilai.mm.music.** { *; }`，构建通过，APK **31.4 MB → 25.2 MB**（-20%）
+
 
 线上最新 Release：**v2026.10.31**（2026-10-31 发布，release commit `9e63193`），资产 `app-release.apk` 31,393,657 B，正式签名。
 
@@ -151,8 +159,10 @@ pubspec = version: 2026.10.31+20265   （app_config.dart 同步 appVersion/appVe
 | Android SDK | `C:\Android\Sdk`：build-tools 37、platform-tools、cmake 3.31.6、NDK 28.2.13676358 |
 | platform-37 坑 | 它是 preview 版，AGP 会下成目录 `android-37.0`；已手工建 `android-37` 别名目录并把 `source.properties` 的 ApiLevel 改为 37。cmdline-tools 需最新版（旧 12.0 认不了 android-37） |
 | 一键脚本 | `scripts/build-android.bat`：pub get → analyze（仅 error 阻断）→ `build apk --release`；路径可用 `FLUTTER_HOME`/`JAVA_HOME`/`ANDROID_HOME` 覆盖，内置 flutter-io.cn 镜像 |
-| 产物 | `build/app/outputs/flutter-apk/app-release.apk`（约 30 MB，非 split，可直接装 arm64/x86_64） |
-| 耗时 | 冷编约 5–8 分钟，热编 2–3 分钟 |
+| 产物 | `build/app/outputs/flutter-apk/app-release.apk`（R8 开启后约 **25 MB**，非 split，可直接装 arm64/x86_64） |
+| 耗时 | 冷编约 5–8 分钟；本次含 analyze 实测 3m23s（增量） |
+
+> R8：上游 2026-11-16 起 `isMinifyEnabled = true` + `isShrinkResources = true` + `android.enableR8.fullMode=true`。原生层依赖 `R.drawable.*` 静态引用与 `-keep class com.hoilai.mm.music.**`，**不要**改用 `getIdentifier` 动态取资源，否则会被资源裁剪删掉。
 
 **正式签名**（与线上 Release 同证书）：`android/key.properties` + `android/release-keystore.p12`（PKCS12，alias `ka`），口令在 `build-artifacts/keystore-password.txt`。三者均在 `.gitignore` 内，**不得入库**。证书 SHA-256 = `76a87e479a20f071c829b99d6fa700a886c2d9b08d13a1605777ef153728c750`。缺 `key.properties` 时构建会**回退 debug 签名**——发版前务必确认走的是正式签名（可与线上 APK 的证书指纹比对）。
 
@@ -220,7 +230,9 @@ sleep 8; "$MM" sh -v 1 --cmd "input tap 190 260"   # 点迷你播放器封面 �
 ## 10. 待办与已知问题
 
 - [x] ~~下次发版 20265~~：**已于 2026-10-31 发布**（tag `v2026.10.31`，Release id 429646924，正文带 markdown）。
-- [ ] **下次发版 20266**：含全屏页渲染节流（`d02b51d`，§3.5），**待车机实测悬浮视频是否恢复流畅后再 push 并发版**；发版前按 §6 步骤（先 push 再打 tag、本地构建、apksigner 校验）。
+- [ ] **下次发版 20266**（版本号 `2026.11.16+20266`）：含 ①全屏页渲染节流（`d02b51d`，§3.5）②上游合并（收藏/排行榜/播放恢复，`dd05918`）③R8 裁剪（APK 25.2 MB）。发版前按 §6 步骤（先 push 再打 tag、本地构建、apksigner 校验）。
+- [ ] **合并后必须实测**（R8 首开，风险点）：车机原生全屏页资源与类是否完好、音频播放正常、收藏按钮与系统媒体通知收藏、排行榜页。
+- [ ] 渲染节流仍需车机实测悬浮视频是否恢复流畅；未通过则降 tick 至 12Hz（旋转每帧 0.9°）。
 - [ ] 若车机实测仍嫌卡：下一档可动歌词切行滚动动画频率（§3.5 末段），或把 tick 降到 12Hz（旋转每帧 0.9°，仍在可接受范围）。
 - [x] ~~领先提交精简~~：2026-10-31 做了一次「外科式压缩」15→8（保留全部 5 个 release 里程碑及其 tag；只压缩中间过程提交，tree 逐字节不变）。备份分支 `backup-pre-squash-20261031`。
 - [ ] **仓库里仍跟踪着两个 29.7 MB 的历史 APK**：`KA_Music_v2026.10.10.apk`、`KA_Music_v2026.10.10_b2.apk`（早期误提交）。建议 `git rm --cached` + 补 `.gitignore`。`.git` 已 192 MB，历史 blob 想彻底清需 git-filter-repo，但那会改动所有 tree、破坏已对齐的 release tag —— **不要做**。
