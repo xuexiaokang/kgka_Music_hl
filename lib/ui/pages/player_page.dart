@@ -246,6 +246,84 @@ class _PlayerBodyState extends State<_PlayerBody> {
         widget.onClose();
       });
     });
+    CarPlayerService.instance.onOpenPage(_openCarPage);
+  }
+
+  /// 车机原生全屏「更多」面板请求打开需要 Flutter 路由的页面。
+  ///
+  /// 全屏期间 Flutter 引擎停帧、原生 Activity 覆盖在 FlutterActivity 之上，
+  /// 因此必须：① 用 dismissNative 收起原生页（走 close 通道，不触发 closed，
+  /// 播放器不会被关掉）；② 借根 Navigator push 目标页面并等待其出栈；
+  /// ③ 出栈后复位 handoff 标志，让下一帧 build 自动重新拉起原生全屏。
+  Future<void> _openCarPage(String page, String songHash) async {
+    if (!mounted) return;
+    final player = widget.player;
+
+    // 先结束原生页，否则 Flutter 页面会被原生窗口盖住看不见。
+    await CarPlayerService.instance.dismissNative();
+    // 关键：dismissNative 只是 finish Activity，service 仍 _active=true，
+    // 而 open() 开头有 `if (_active) return` —— 不在此处 close，返回时全屏永不再拉起。
+    CarPlayerService.instance.close();
+    if (!mounted) return;
+    // 给原生 Activity finish / Flutter 恢复渲染留出时间，避免页面 push 到
+    // 仍被覆盖的窗口上（车机 GPU 弱，窗口切换比手机慢）。
+    await Future<void>.delayed(const Duration(milliseconds: 120));
+    if (!mounted) return;
+    // ctx 在 await 之后再取，避免跨异步间隙持有已失效的 BuildContext。
+    final ctx = Toast.navigatorKey.currentState?.context;
+    if (ctx == null || !ctx.mounted) return;
+
+    // songHash 用于切歌竞态时从队列精确定位；找不到则回退当前歌曲。
+    final Song? song = player.currentSong;
+    Song? target = song;
+    if (songHash.isNotEmpty && song != null && song.hash != songHash) {
+      for (final s in player.queue) {
+        if (s.hash == songHash) {
+          target = s;
+          break;
+        }
+      }
+    }
+    switch (page) {
+      case 'songDetail':
+        final s = target;
+        if (s != null) {
+          await Navigator.of(ctx).push<void>(MaterialPageRoute<void>(
+            builder: (_) => SongDetailPage(song: s, api: player.api),
+          ));
+        }
+        break;
+      case 'comments':
+        final s = target;
+        if (s != null && supportsComments(s)) {
+          await Navigator.of(ctx).push<void>(MaterialPageRoute<void>(
+            builder: (_) => CommentPage(song: s),
+          ));
+        } else {
+          Toast.error('目前只支持查看酷狗 / 网易云评论');
+        }
+        break;
+      case 'addToPlaylist':
+        final s = target;
+        if (s != null) {
+          await showAddToPlaylistSheet(
+              context: ctx, auth: widget.auth, song: s);
+        }
+        break;
+      case 'lyricsSettings':
+        await Navigator.of(ctx).push<void>(MaterialPageRoute<void>(
+          builder: (_) => DesktopLyricsSettingsPage(player: player),
+        ));
+        break;
+    }
+
+    // 页面出栈：重新允许 handoff，下一帧 build 会重新 open 原生全屏。
+    if (!mounted) return;
+    setState(() {
+      _carHandoff = false;
+      _handoffSuppressed = false;
+      _handoffScheduled = false;
+    });
   }
 
   @override

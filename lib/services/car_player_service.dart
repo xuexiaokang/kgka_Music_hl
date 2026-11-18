@@ -31,10 +31,14 @@ class CarPlayerService {
   String _lastMetaSig = '';
   Map<String, Object?>? _theme;
   void Function()? _onClosed;
+  /// 原生「更多」面板请求打开 Flutter 页面（详细信息/评论/添加到歌单/歌词设置）。
+  /// 由 player_page 注册：负责临时收起原生页、push 页面、返回后重新拉起全屏。
+  Future<void> Function(String page, String songHash)? _onOpenPage;
 
   bool get isActive => _active;
 
   void onClosed(void Function() cb) => _onClosed = cb;
+  void onOpenPage(Future<void> Function(String, String) cb) => _onOpenPage = cb;
 
   Future<void> open(PlayerController player, AuthController auth,
       {Map<String, Object?>? theme}) async {
@@ -116,6 +120,10 @@ class CarPlayerService {
       'isLiked': liked,
       'canLike': isKugou,
       'isKugou': isKugou,
+      'songHash': s?.hash ?? '',
+      // 上游车机播放页菜单的能力开关，供原生「更多」面板决定是否显示磁贴
+      'canComment': s != null && _supportsComments(s),
+      'canAddToPlaylist': isKugou,
       'queue': _queueList(p),
       // ---- "更多"面板：当前选择快照，供原生渲染勾选/副标题 ----
       'audioQualityIndex': p.audioQuality.index,
@@ -135,6 +143,13 @@ class CarPlayerService {
           (climax != null && climax.isValid) ? climax.startTime.inMilliseconds : null,
     };
   }
+
+  /// 与 comment_page.dart 的 supportsComments 保持一致（service 层不依赖 UI）。
+  bool _supportsComments(Song s) => switch (s.source) {
+        SongSource.kugou => s.hash.isNotEmpty,
+        SongSource.netease => (s.albumAudioId ?? s.id).isNotEmpty,
+        SongSource.local => false,
+      };
 
   /// 播放队列快照，供原生全屏的"歌单/队列"面板展示。
   List<Map<String, dynamic>> _queueList(PlayerController p) {
@@ -356,6 +371,17 @@ class CarPlayerService {
         _toNative.invokeMethod<void>('meta', _metaMap(p));
         _toNative.invokeMethod<void>('lyrics', {'lines': _encodeLyrics(p.lyrics)});
         _pushSync();
+        break;
+      case 'openPage':
+        // 原生「更多」面板点开需要 Flutter 路由的页面。全屏期间 Flutter 引擎停帧，
+        // 因此交给 player_page：先收起原生页、push 页面，用户返回后再重新拉起全屏。
+        // 注意这里不触发 closed（那会关掉整个播放器）。
+        // fire-and-forget：该回调会持续到用户关闭页面为止，不能长期占用 handler。
+        final args = call.arguments as Map?;
+        final page = args?['page'] as String? ?? '';
+        final hash = args?['songHash'] as String? ?? '';
+        final cb = _onOpenPage;
+        if (page.isNotEmpty && cb != null) unawaited(cb(page, hash));
         break;
       case 'closed':
         close();
