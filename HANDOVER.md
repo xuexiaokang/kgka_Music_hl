@@ -22,25 +22,50 @@
 
 ---
 
-## 2. 当前状态快照（2026-11-16 晚，已二次合并上游 60a5f04，未发版）
+## 2. 当前状态快照（2026-11-18，车机全屏差集功能已合入并实测，未发版）
 
 ```
-HEAD   = 2a49664 test: 适配上游新测试（194 全过）
-origin = 已同步（0/0）
-upstream/master = 落后 0、领先 18（全部已 push，不可再 squash——§7.3）
+HEAD   = 79b6ccc feat: 车机全屏更多面板补齐上游差集功能（5 项，MuMu 实测全过）
+origin = 已同步（620ad92..79b6ccc 已 push）
+upstream/master = 落后 0、领先 21（全部已 push，不可再 squash——§7.3）
 pubspec = version: 2026.11.16+20266   （准发版，tag 未打）
-工作区 = 干净；最终 APK md5 8c26fbdc…（25.2MB，正式签名）
+工作区 = 干净；当前 APK md5 36d44f11…（25.2MB，正式签名，含差集功能）
 ```
 
-**领先上游 18 个提交的结构**（5 个 release 里程碑 + 4 个 merge + 9 个功能/修复）：
+**2026-11-18 新增：车机全屏「更多」面板差集功能（79b6ccc）**
+
+上游 Flutter 车机页与本 fork 原生 `CarPlayerActivity` 的功能差集一次补齐，5 项全部在 MuMu
+车机实例（Android 15）实测通过：
+
+1. **歌词字号**：5 档（85/100/115/130/150%），`CarLyricView.setStyles` 缩放 +
+   SharedPreferences（`car_player_prefs/lyric_scale`）持久化，仅影响车机全屏。
+2. **详细信息**：`openPage(songDetail)` → `SongDetailPage`（专辑/发行/时长/音源/ID/Hash）。
+3. **查看评论**：`openPage(comments)` → `CommentPage`（meta 带 `canComment`：酷狗 hash /
+   网易 albumAudioId，本地不显示）。
+4. **添加到歌单**：`openPage(addToPlaylist)` → `showAddToPlaylistSheet`（meta 带
+   `canAddToPlaylist`：仅酷狗）。
+5. **歌词设置**：桌面歌词开启时出现磁贴，`openPage(lyricsSettings)` →
+   `DesktopLyricsSettingsPage`。首次开启桌面歌词需悬浮窗权限（系统弹授权页，MuMu 里已用
+   `appops set … SYSTEM_ALERT_WINDOW allow` 授予；真机首次使用会走系统弹窗）。
+
+跨层生命周期：原生页发 `openPage` → Flutter `player_page._openCarPage`：
+`dismissNative()`（close 通道，只 finish 不发 closed）+ `CarPlayerService.close()`（否则
+重进时 `_active` 短路）+ 120ms 延迟 → 根 Navigator push 目标页 → 返回后 setState 重置
+`_carHandoff/_handoffSuppressed/_handoffScheduled` → 原生全屏自动重进。三条路径均实测重进正常。
+
+MuMu 点击坐标换算（防再次踩坑）：MuMu 窗口 `nemuwin` 为 1366×768（与设备 1:1），
+`_cap_pw.ps1` 截图输出 900×506（×1.5178 缩小）。`input tap` 用**设备坐标**，直接拿截图
+像素点会偏。验证可用 `uiautomator` 在 `sh` 通道不可用（libnativeloader 链接失败）。
+
+**领先上游 21 个提交的结构**（在原 18 个基础上新增 3 个）：
 
 | 类别 | 提交 |
 |---|---|
 | release 里程碑（带 tag，绝不可改写） | `fdad8bd`(20261) → `2167769`(20262) → `bd9adc7`(20263) → `c159f35`(20264) → `9e63193`(20265) |
 | merge 上游 | `25e6903` → `dd05918`(60bd37d) → `5757ff1`(ced8c47) → `330c506`(60a5f04) |
-| 功能/性能 | `d02b51d` 渲染节流（61→21fps）→ `bec1aa8` 黑胶 v6 + 停跟踪 pkkuwo → `49066eb` 停跟踪旧 APK → `2a49664` 测试适配 |
+| 功能/性能 | `d02b51d` 渲染节流 → `bec1aa8` 黑胶 v6 + 停跟踪 pkkuwo → `49066eb` 停跟踪旧 APK → `2a49664` 测试适配 |
 | release 准备 | `3773922` 版本号 20266 |
-| docs/chore | `62121c1`/`ce9b2d3`/`63347d1` 交接文档、`5d5ace6` lock 刷新 |
+| docs/chore | `62121c1`/`ce9b2d3`/`63347d1` 交接文档、`5d5ace6` lock 刷新、`6e2ef74` .gitignore 忽略根目录 apk、`79b6ccc` 车机差集功能 |
 
 > 这 18 个全部已 push 到 origin。**不要再做「领先 N 就压缩」**：squash 必须 force-push，
 > 违反 §7.3（改写已发布历史 + 破坏 5 个 release tag + 摚乱与 upstream 的 merge 基准）。
@@ -66,7 +91,8 @@ pubspec = version: 2026.11.16+20266   （准发版，tag 未打）
 | v2026.10.29 | 20264 | 专辑详情无歌修复、车机黑胶唱片按网易云样式复刻 | 本地构建 + 手动发布 |
 | v2026.10.31 | 20265 | 黑胶重做（深黑盘体+窄叶方向光+极简外缘）、停止跟踪 `pkkuwo/` | 本地构建 + 手动发布 |
 
-**尚未发布的提交：无**（20265 已发，master 与 origin 同步）。
+**尚未发布的提交**：`3773922`（版本号）→ `2a49664`（测试）→ `6e2ef74`（gitignore）→
+`79b6ccc`（车机差集功能）等 20266 系列，随 v2026.11.16 一起发版。
 
 相对上游的私有差异共 83 文件（+7277 / −431），大头是 `android/` 原生播放器与 `third_party/flutter_lyric/`。
 
@@ -233,7 +259,8 @@ sleep 8; "$MM" sh -v 1 --cmd "input tap 190 260"   # 点迷你播放器封面 �
 
 要点与坑：
 
-- 设备物理竖屏 768×1366、系统强制横屏，截图 1366×768；`input tap` 直接用**截图像素坐标**。
+- 设备物理竖屏 768×1366、系统强制横屏，窗口 `nemuwin` 为 1366×768（与设备 1:1）。当前 `_cap_pw.ps1` 截图输出 **900×506**（缩小 ×1.5178）：`input tap` 必须用**设备坐标 = 截图坐标 × 1.5178**，直接拿截图像素会偏（曾点左列命中右列）。量坐标时可用 `_cap_mumu.ps1`（不缩放）或除回 1.5178。
+- `uiautomator` 在 `MuMuManager sh` 通道不可用（`libnativeloader.so` 链接失败）；`adb connect 127.0.0.1:<adb_port>` 会被拒，只能走 `sh -c`。悬浮窗权限可直接 `appops set com.hoilai.mm.music SYSTEM_ALERT_WINDOW allow`。
 - 直接 `am start .CarPlayerActivity` 只会看到空壳——它需要 Dart 侧的 `CarPlayerBridge.snapshot`，必须走 App 正常路径进入。
 - `monkey -p ... -c android.intent.category.LAUNCHER 1` 经 MuMuManager 会被参数拆分而失效，用 `am start`。
 - 确认设备上就是刚编的包：本地 `md5sum app-release.apk` 对比设备 `md5sum /data/app/*/com.hoilai.mm.music*/base.apk`。
@@ -244,7 +271,7 @@ sleep 8; "$MM" sh -v 1 --cmd "input tap 190 260"   # 点迷你播放器封面 �
 ## 10. 待办与已知问题
 
 - [x] ~~下次发版 20265~~：**已于 2026-10-31 发布**（tag `v2026.10.31`，Release id 429646924，正文带 markdown）。
-- [ ] **下次发版 20266**（版本号 `2026.11.16+20266`，提交 `3773922`）：含 ①全屏页渲染节流（`d02b51d`，§3.5）②两批上游合并（`dd05918`+`5757ff1`+`330c506`：收藏/排行榜/R8/打断修复/蓝牙防外放/下载元数据）③R8 裁剪（APK 25.2 MB）。master 已 push（`2a49664`），剩：打 tag `v2026.11.16` → 本地构建（md5 `8c26fbdc…`）→ 发 Release。**发版门：真车机实测悬浮视频流畅 + 来电/蓝牙断开行为**。
+- [ ] **下次发版 20266**（版本号 `2026.11.16+20266`，已 push 至 `79b6ccc`）：含 ①全屏页渲染节流（`d02b51d`，§3.5）②两批上游合并（收藏/排行榜/R8/打断修复/蓝牙防外放/下载元数据）③R8 裁剪 ④**车机全屏差集 5 项功能**（`79b6ccc`，歌词字号/详细信息/查看评论/添加到歌单/歌词设置，MuMu 全实测）。剩：真车机实测过门 → 打 tag `v2026.11.16` → 本地构建（md5 `36d44f11…`）→ 发 Release。**发版门：真车机实测悬浮视频流畅 + 来电/蓝牙断开行为**。
 - [x] ~~合并后 MuMu 实测（R8 首开风险点）~~：2026-11-16 于车机实例（Android 15）冒烟全部通过——冷启 968ms、Flutter 分栏首页/排行榜/专辑详情正常、原生全屏页黑胶/歌词/控制完整、收藏变实心、帧率 19.5fps、无崩溃。详见 `memory/2026-11-16.md`。
 - [ ] 渲染节流仍需**真车机**实测悬浮视频是否恢复流畅（MuMu 19.5fps 已验证节流生效）；未通过则降 tick 至 12Hz（旋转每帧 0.9°）。
 - [ ] 若车机实测仍嫌卡：下一档可动歌词切行滚动动画频率（§3.5 末段），或把 tick 降到 12Hz（旋转每帧 0.9°，仍在可接受范围）。
@@ -260,8 +287,7 @@ sleep 8; "$MM" sh -v 1 --cmd "input tap 190 260"   # 点迷你播放器封面 �
 
 ## 11. 记忆与日志位置
 
-- 项目长期记忆：`~/.qoderworkcn/awareness/main/memory/ka-music.md`（含线性化压缩手法、本地构建环境明细、黑胶参数、MuMu 进车机全屏流程）。
-- 每日日志：`~/.qoderworkcn/awareness/main/memory/YYYY-MM-DD.md`（append-only，用 memory 工具写）。
+- 会话工作区（WorkBuddy）：`C:\Users\XXK\WorkBuddy\代可行`。项目长期记忆 `MEMORY.md`；每日日志 `memory/YYYY-MM-DD.md`（append-only）。
 - 跨项目通用技巧（GitHub Data API 推送、MuMu 操作、Windows 中文写入用 Python/heredoc 等）在全局 `MEMORY.md`。
 - 临时脚本与截图放会话工作区（`C:\Users\XXK\.qoderworkcn\workspace\<id>`），不要往仓库根扔。**注意**：MSYS 的 `/tmp` 原生 Python 读不到，落盘要用工作区绝对路径。
 
