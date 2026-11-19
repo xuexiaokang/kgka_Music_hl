@@ -53,6 +53,8 @@ class MainActivity : AudioServiceActivity() {
         private const val REQUEST_READ_AUDIO = 1001
         private const val TAG_SUPER_LYRIC = "SuperLyricPublisher"
         private const val TAG_BLUETOOTH_LYRICS = "BluetoothLyrics"
+        private const val TAG_VOLUME_NORMALIZATION = "VolumeNormalization"
+        private const val DEFAULT_VOLUME_GAIN_DB = 3.0f
     }
 
     private val downloadReceiver = object : BroadcastReceiver() {
@@ -212,9 +214,12 @@ class MainActivity : AudioServiceActivity() {
                     "configureVolumeNormalization" -> {
                         val audioSessionId = call.argument<Int>("audioSessionId")
                         val enabled = call.argument<Boolean>("enabled") ?: false
+                        val gainDb =
+                            (call.argument<Double>("gainDb") ?: DEFAULT_VOLUME_GAIN_DB.toDouble())
+                                .toFloat()
 
                         runCatching {
-                            configureVolumeNormalization(audioSessionId, enabled)
+                            configureVolumeNormalization(audioSessionId, enabled, gainDb)
                         }.onSuccess { supported ->
                             result.success(supported)
                         }.onFailure { error ->
@@ -885,7 +890,11 @@ class MainActivity : AudioServiceActivity() {
         bassBoostSessionId = null
     }
 
-    private fun configureVolumeNormalization(audioSessionId: Int?, enabled: Boolean): Boolean {
+    private fun configureVolumeNormalization(
+        audioSessionId: Int?,
+        enabled: Boolean,
+        gainDb: Float = DEFAULT_VOLUME_GAIN_DB
+    ): Boolean {
         if (!enabled) {
             releaseDynamicsProcessing()
             return true
@@ -898,6 +907,10 @@ class MainActivity : AudioServiceActivity() {
         }
 
         try {
+            Log.d(
+                TAG_VOLUME_NORMALIZATION,
+                "configure: enabled=$enabled gainDb=$gainDb session=$audioSessionId"
+            )
             val effect = if (dynamicsProcessingSessionId == audioSessionId && dynamicsProcessing != null) {
                 dynamicsProcessing!!
             } else {
@@ -922,9 +935,11 @@ class MainActivity : AudioServiceActivity() {
             }
 
             // 纯在线流无法做逐曲响度归一化（播放前拿不到整曲 LUFS），
-            // 因此用「静态补偿 + 末端限幅」近似：低电平歌曲净得约 +3dB，
+            // 因此用「静态补偿 + 末端限幅」近似：低电平歌曲净得 gainDb，
             // 高电平歌曲峰值由下方 limiter(-1dB/10:1) 兜住，形成抬底不削峰的准均衡。
-            // 不取 96b45bd 的 preGain2+postGain4=+6dB：那会重现「音量突变/削顶破音」。
+            // gainDb 由设置页「音量增益」下发（默认 +3dB，可选 0/+3/+6/+9/+12）。
+            // preGain 恒为 0：推高压缩器输入会被 2:1 压缩吃掉，且容易重现上游 #153
+            //「打开音量均衡后首次播放变电流声」。档位越高越依赖 limiter，可能削顶/破音。
             val mbcBand = DynamicsProcessing.MbcBand(
                 true, // enabled
                 20000.0f, // cutoffFrequency
@@ -935,8 +950,8 @@ class MainActivity : AudioServiceActivity() {
                 6.0f, // kneeWidth: 6dB 软拐点平滑过渡
                 -60.0f, // noiseGateThreshold
                 1.0f, // expanderRatio
-                0.0f, // preGain: 0dB，不额外推高压缩器输入（否则增益会被 MBC 重新压回去）
-                3.0f // postGain: +3dB 增益补偿（压缩后 makeup gain）
+                0.0f, // preGain: 0dB，不额外推高压缩器输入
+                gainDb // postGain: 压缩后 makeup gain，由设置页下发
             )
 
             val limiter = DynamicsProcessing.Limiter(

@@ -46,6 +46,72 @@ class SettingsPage extends StatelessWidget {
   final CacheService? cache;
   final DownloadController? downloads;
 
+  String _gainLabel(double gain) {
+    if (gain == 0) return '0 dB（不增益）';
+    return '+${gain.toStringAsFixed(0)} dB';
+  }
+
+  Future<void> _selectVolumeGain(
+    BuildContext context,
+    PlayerController player,
+  ) async {
+    final gainLabels = <double, String>{
+      0.0: '0 dB（不增益，同上游默认）',
+      3.0: '+3 dB（默认，温和）',
+      6.0: '+6 dB（明显）',
+      9.0: '+9 dB（较强）',
+      12.0: '+12 dB（最强，可能破音）',
+    };
+
+    final selected = await showModalBottomSheet<double>(
+      context: context,
+      showDragHandle: true,
+      backgroundColor: Theme.of(context).colorScheme.surface,
+      builder: (sheetContext) {
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  '音量增益',
+                  style: Theme.of(sheetContext).textTheme.titleLarge?.copyWith(
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  '仅对音量均衡生效。增益越高声音越大，但也越容易触发限幅或破音；'
+                  '建议从 +6 dB 开始试。',
+                  style: Theme.of(sheetContext).textTheme.bodyMedium,
+                ),
+                const SizedBox(height: 8),
+                for (final gain in PlayerController.volumeGainOptions) ...[
+                  ListTile(
+                    title: Text(gainLabels[gain] ?? '+${gain.toStringAsFixed(0)} dB'),
+                    trailing: player.volumeGainDb == gain
+                        ? Icon(
+                            Icons.check_rounded,
+                            color: Theme.of(sheetContext).colorScheme.primary,
+                          )
+                        : null,
+                    onTap: () => Navigator.of(sheetContext).pop(gain),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        );
+      },
+    );
+
+    if (selected != null) {
+      await player.setVolumeGainDb(selected);
+    }
+  }
+
   String _fontScaleLabel(double scale) {
     if (scale >= 1.2) return '特大';
     if (scale >= 1.1) return '大';
@@ -377,6 +443,15 @@ class SettingsPage extends StatelessWidget {
                       value: player.volumeNormalizationEnabled,
                       onChanged: player.setVolumeNormalizationEnabled,
                     ),
+                    if (player.volumeNormalizationEnabled)
+                      _SettingsTile(
+                        icon: Icons.tune_rounded,
+                        iconColor: colorScheme.primary,
+                        title: '音量增益',
+                        subtitle:
+                            '当前 ${_gainLabel(player.volumeGainDb)} · 提升低电平歌曲，过高可能破音',
+                        onTap: () => _selectVolumeGain(context, player),
+                      ),
                     _SettingsDivider(),
                     _SettingsTile(
                       icon: Icons.graphic_eq_rounded,

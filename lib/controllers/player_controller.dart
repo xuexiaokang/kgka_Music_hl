@@ -194,6 +194,7 @@ class PlayerController extends ChangeNotifier {
       'settings.auto_pause_on_device_disconnect';
   static const _volumeNormalizationEnabledSettingKey =
       'settings.volume_normalization_enabled';
+  static const _volumeGainDbSettingKey = 'settings.volume_gain_db';
   static const _bluetoothLyricsEnabledSettingKey =
       'settings.bluetooth_lyrics_enabled';
   static const _keepScreenOnSettingKey = 'settings.keep_screen_on';
@@ -516,6 +517,13 @@ class PlayerController extends ChangeNotifier {
   /// 断开时依据 [autoResumeAfterInterruption] 决定是否恢复。
   bool autoPauseOnDeviceDisconnect = true;
   bool volumeNormalizationEnabled = false;
+
+  /// 音量均衡的静态增益补偿（dB），下发到 DynamicsProcessing 的 MbcBand.postGain。
+  /// 默认 +3dB：保持 2026-11-19 恢复增益补偿后的听感，不回退到上游的 0dB。
+  double volumeGainDb = 3.0;
+
+  /// 可选增益档位。越高越容易触发 limiter，可能重现上游 #153 的削顶/破音。
+  static const volumeGainOptions = <double>[0.0, 3.0, 6.0, 9.0, 12.0];
   bool bluetoothLyricsEnabled = false;
   // 普通蓝牙车机只读取 AVRCP 标题，不会读取手机上的歌词广播或 extras。
   bool bluetoothLyricsTitleSyncEnabled = true;
@@ -1475,6 +1483,17 @@ class PlayerController extends ChangeNotifier {
     volumeNormalizationEnabled = enabled;
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_volumeNormalizationEnabledSettingKey, enabled);
+    await _applyVolumeNormalization();
+    notifyListeners();
+  }
+
+  /// 调整音量均衡的静态增益补偿，立即重新下发到原生效果器。
+  /// 增益只在音量均衡开启时生效；关闭时原生侧直接释放 DynamicsProcessing。
+  Future<void> setVolumeGainDb(double gainDb) async {
+    if (volumeGainDb == gainDb) return;
+    volumeGainDb = gainDb;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setDouble(_volumeGainDbSettingKey, gainDb);
     await _applyVolumeNormalization();
     notifyListeners();
   }
@@ -2755,6 +2774,7 @@ class PlayerController extends ChangeNotifier {
     volumeNormalizationEnabled =
         prefs.getBool(_volumeNormalizationEnabledSettingKey) ??
         volumeNormalizationEnabled;
+    volumeGainDb = prefs.getDouble(_volumeGainDbSettingKey) ?? volumeGainDb;
     bluetoothLyricsEnabled =
         prefs.getBool(_bluetoothLyricsEnabledSettingKey) ??
         bluetoothLyricsEnabled;
@@ -2882,6 +2902,7 @@ class PlayerController extends ChangeNotifier {
       audioSessionId:
           _androidAudioSessionId ?? audioPlayer.androidAudioSessionId,
       enabled: volumeNormalizationEnabled,
+      gainDb: volumeGainDb,
     );
   }
 
@@ -3244,6 +3265,7 @@ class PlayerController extends ChangeNotifier {
         audioSessionId:
             _androidAudioSessionId ?? audioPlayer.androidAudioSessionId,
         enabled: false,
+        gainDb: volumeGainDb,
       ),
     );
     _audioHandler.detachTransportControls();

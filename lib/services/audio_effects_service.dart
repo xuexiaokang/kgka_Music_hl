@@ -144,6 +144,7 @@ class AudioEffectsService {
   Future<bool> configureVolumeNormalization({
     required int? audioSessionId,
     required bool enabled,
+    double gainDb = 3.0,
   }) async {
     if (!isAudioEffectsSupported) {
       return false;
@@ -153,6 +154,7 @@ class AudioEffectsService {
       final result = await _channel.invokeMethod<bool>('configureVolumeNormalization', {
         'audioSessionId': audioSessionId,
         'enabled': enabled,
+        'gainDb': gainDb,
       });
       return result ?? false;
     } on PlatformException catch (error) {
