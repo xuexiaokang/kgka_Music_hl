@@ -1631,7 +1631,7 @@ class _AgcLiveTileState extends State<_AgcLiveTile> {
   String _subtitle(AgcStatus? status) {
     if (status == null) return '正在测量当前歌曲响度…';
     if (!status.active) return '自动增益未激活 · 请确认录音权限';
-    final gain = signedGainLabel(status.gainDb, fractionDigits: 0);
+    final gain = signedGainLabel(status.gainDb, fractionDigits: 1);
     return '当前 $gain'
         ' · 测得 ${status.measuredRmsDb.toStringAsFixed(1)} dBFS'
         '${status.locked ? ' · 已稳定' : ' · 调节中'}';

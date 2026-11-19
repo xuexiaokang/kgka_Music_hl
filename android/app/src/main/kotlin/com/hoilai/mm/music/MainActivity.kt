@@ -1065,7 +1065,13 @@ class MainActivity : AudioServiceActivity() {
         }
         releaseDynamicsProcessing()
         val config = DynamicsProcessing.Config.Builder(
-            DynamicsProcessing.VARIANT_FAVOR_FREQUENCY_RESOLUTION,
+            // 时域实现（官方 VARIANT_FAVOR_TIME_RESOLUTION=1）：原用的频域变体(0)
+            // 会走 FFT / 分频滤波器组，即使单 band 且 EQ 全关，仍引入额外加窗与
+            // 频率截断，是最后一个可能劣化高频的参数。现在 MBC 只是纯增益级、
+            // 无 EQ，改用直接对波形处理的时域变体：无分频、无高频滚降、延迟更低。
+            DynamicsProcessing.VARIANT_FAVOR_TIME_RESOLUTION,
+            // 框架会用 effect 引擎的实际通道数重建配置（AOSP：new Config(mChannelCount, cfg)
+            // 且「replicate channels if more」），故这里写 2 不会导致声道被静音或丢失。
             2, // channels
             false, // preEq
             0,
@@ -1267,6 +1273,28 @@ class MainActivity : AudioServiceActivity() {
         // 正常/偏响的歌增益恒为 0dB，从根上杜绝「正常歌被减」。
         val desiredGain = (agcTargetRmsDb - measuredDb)
             .coerceIn(AGC_MIN_GAIN_DB, AGC_MAX_GAIN_DB)
+
+        // 只补不减下 0dB 是硬边界：测得已比目标响时，增益必须一路回到 0。
+        // 否则 0.8dB 死区会把增益卡在 +0.6dB（UI 四舍五入显示成 +1dB）并锁定；
+        // 锁定后 gap 仅 -0.6dB，远小于解锁阈值 1.6dB，直到切歌都解不开。
+        // 走独立归零分支：不进死区、不锁定，仍按每步 0.6dB 平滑下降避免音量突降。
+        if (desiredGain <= 0f) {
+            if (agcLocked) {
+                agcLocked = false
+                agcStableCycles = 0
+            }
+            if (agcCurrentGainDb <= 0.01f) return
+            val nextGain = (agcCurrentGainDb - AGC_MAX_STEP_DB)
+                .coerceIn(AGC_MIN_GAIN_DB, AGC_MAX_GAIN_DB)
+            agcCurrentGainDb = nextGain
+            dynamicsProcessing?.let { applyMbcAndLimiter(it, agcCurrentGainDb) }
+            Log.d(
+                TAG_VOLUME_NORMALIZATION,
+                "AGC release: gain=${agcCurrentGainDb}dB measured=${measuredDb}dB"
+            )
+            return
+        }
+
         // 当前增益与目标增益之差；死区/锁定都基于这个差，而非绝对响度误差。
         val gap = desiredGain - agcCurrentGainDb
         val absGap = abs(gap)
