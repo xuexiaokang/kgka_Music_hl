@@ -13,6 +13,9 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Environment
+import android.os.Handler
+import android.os.HandlerThread
+import android.os.Looper
 import android.provider.MediaStore
 import android.provider.Settings
 import android.util.Log
@@ -33,8 +36,6 @@ import com.hchen.superlyricapi.SuperLyricLine
 import com.hchen.superlyricapi.SuperLyricWord
 import java.io.File
 import kotlin.math.abs
-import kotlin.math.log10
-import kotlin.math.sqrt
 
 class MainActivity : AudioServiceActivity() {
     private val updateDownloads = mutableMapOf<Long, String>()
@@ -64,7 +65,10 @@ class MainActivity : AudioServiceActivity() {
     private var agcLocked = false
     private var agcStableCycles = 0
     private var lastMeasuredRmsDb = 0.0f
-    private var agcLastSampleAtMs = 0L
+    // 官方 PEAK_RMS 测量：后台线程轮询 getMeasurementPeakRms，避免主线程 binder 调用。
+    private var agcMeasureThread: HandlerThread? = null
+    private var agcMeasureHandler: Handler? = null
+    private val agcMeasurement = Visualizer.MeasurementPeakRms()
     private var pendingPermissionResult: MethodChannel.Result? = null
     private var deepLinkChannel: MethodChannel? = null
     private var initialDeepLink: String? = null
@@ -84,10 +88,8 @@ class MainActivity : AudioServiceActivity() {
         private const val AGC_MAX_TARGET_DBFS = -3.0f
         private const val AGC_MIN_GAIN_DB = -8.0f
         private const val AGC_MAX_GAIN_DB = 18.0f
-        // 采样窗口 400ms；每步最多调整 0.6dB，约 5~15 秒收敛到目标，避免"呼吸效应"。
+        // RMS 轮询/调整周期 400ms；每步最多调整 0.6dB，约 5~15 秒收敛到目标，避免"呼吸效应"。
         private const val AGC_SAMPLE_INTERVAL_MS = 400L
-        // Visualizer 回调频率（Hz）：20Hz 采集，回调里按 400ms 节流处理。
-        private const val AGC_CALLBACK_RATE_HZ = 20
         private const val AGC_MAX_STEP_DB = 0.6f
         private const val AGC_DEADZONE_DB = 0.8f
         // 增益进入死区后连续 N 次采样才锁定；偏离超过阈值 N 次才重新解锁。
@@ -1008,7 +1010,7 @@ class MainActivity : AudioServiceActivity() {
             effect.enabled = true
 
             // 模式只由 agcActive 决定，不再 stop/new Visualizer。
-            // 两种模式共用常驻 Visualizer：fixed 时 onAgcWaveform 早退不调整，
+            // 两种模式共用常驻 Visualizer：fixed 时 onAgcMeasuredRms 早退不调整，
             // auto 时正常收敛。这样 auto↔fixed 切换零 binder 重建、不卡顿。
             agcActive = autoGain
             if (autoGain) {
@@ -1136,68 +1138,60 @@ class MainActivity : AudioServiceActivity() {
         }
         try {
             val visualizer = Visualizer(audioSessionId)
-            // 必须关掉自动缩放（SCALING_MODE_NONE=0），否则 getWaveForm 返回的是
-            // 归一化到满幅的数据，测不到真实响度。用字面值 0 规避 preview SDK 符号解析问题。
-            visualizer.scalingMode = 0
-            visualizer.setDataCaptureListener(
-                object : Visualizer.OnDataCaptureListener {
-                    override fun onWaveFormDataCapture(
-                        visualizer: Visualizer?,
-                        waveform: ByteArray?,
-                        samplingRate: Int
-                    ) {
-                        if (waveform != null) onAgcWaveform(waveform)
-                    }
-
-                    override fun onFftDataCapture(
-                        visualizer: Visualizer?,
-                        fft: ByteArray?,
-                        samplingRate: Int
-                    ) {
-                    }
-                },
-                AGC_CALLBACK_RATE_HZ,
-                true, // waveform
-                false // fft
-            )
+            // 用官方 PEAK_RMS 测量（系统级 16bit 精度、绝对 mB 电平），不再从 8bit 波形手算 RMS。
+            // SCALING_MODE_NORMALIZED(0) 会把波形按内容放大到满幅，测不到真实响度；
+            // 虽然 RMS 测量本身不受 scalingMode 影响，仍设为 AS_PLAYED(1) 保持一致语义。
+            // 注意：SDK 中并无 SCALING_MODE_NONE 常量，0 就是 NORMALIZED（上一版本的隐藏 bug）。
+            visualizer.scalingMode = Visualizer.SCALING_MODE_AS_PLAYED
+            visualizer.setMeasurementMode(Visualizer.MEASUREMENT_MODE_PEAK_RMS)
             visualizer.enabled = true
             loudnessVisualizer = visualizer
             agcEnabled = true
             agcLocked = false
             agcStableCycles = 0
-            agcLastSampleAtMs = 0L
-            Log.d(TAG_VOLUME_NORMALIZATION, "AGC started: session=$audioSessionId")
+
+            // 后台线程每 400ms 轮询一次 RMS：getMeasurementPeakRms 是 binder 同步调用，
+            // 放主线程会在音频繁忙时阻塞 UI（历史上多次卡顿的根因）。
+            val thread = HandlerThread("KA-AgcRms").apply { start() }
+            val handler = Handler(thread.looper)
+            agcMeasureThread = thread
+            agcMeasureHandler = handler
+            val poll = object : Runnable {
+                override fun run() {
+                    if (!agcEnabled) return
+                    val v = loudnessVisualizer
+                    if (v != null) {
+                        // 与 stopLoudnessAgc 存在竞态：visualizer 可能刚被 release，
+                        // binder 调用抛异常时安静跳过，下一周期自然恢复。
+                        runCatching {
+                            val rc = v.getMeasurementPeakRms(agcMeasurement)
+                            if (rc == Visualizer.SUCCESS) {
+                                // mRms 单位 mB（0=满刻度，-9600=16bit 静音下限），转 dBFS。
+                                val measuredDb = agcMeasurement.mRms / 100.0f
+                                onAgcMeasuredRms(measuredDb)
+                            }
+                        }
+                    }
+                    handler.postDelayed(this, AGC_SAMPLE_INTERVAL_MS)
+                }
+            }
+            handler.post(poll)
+            Log.d(TAG_VOLUME_NORMALIZATION, "AGC started: session=$audioSessionId mode=PEAK_RMS")
         } catch (e: Exception) {
             Log.w(TAG_VOLUME_NORMALIZATION, "AGC start failed: ${e.message}")
             stopLoudnessAgc()
         }
     }
 
-    private fun onAgcWaveform(waveform: ByteArray) {
+    private fun onAgcMeasuredRms(measuredDb: Float) {
         // fixed 模式下 Visualizer 常驻但不做任何调整，只做一次布尔判断立即返回。
         if (!agcEnabled || !agcActive) return
-        val now = android.os.SystemClock.elapsedRealtime()
-        if (now - agcLastSampleAtMs < AGC_SAMPLE_INTERVAL_MS) return
-        agcLastSampleAtMs = now
-
-        // getWaveForm 返回 8bit 无符号 PCM（0~255，静音基准=128）。
-        // 必须先减 128 转成有符号幅度（-128~127）再归一化，否则静音会被算成满幅 1.0
-        // → 测得 0dBFS，响度反馈完全失真（静音冻结失效、响歌反而加更多增益）。
-        var sumSquares = 0.0
-        var count = 0
-        for (sample in waveform) {
-            val signed = (sample.toInt() and 0xFF) - 128
-            val normalized = signed / 128.0
-            sumSquares += normalized * normalized
-            count++
-        }
-        if (count == 0) return
-        val rms = sqrt(sumSquares / count)
-        if (rms < 1e-5) return
-        val measuredDb = (20.0 * log10(rms)).toFloat()
+        // measuredDb 来自官方 getMeasurementPeakRms 的 mRms（mB），已是系统级精确绝对电平，
+        // 不再依赖 8bit 波形估算（无符号基准、量化误差、scalingMode 归一化等历史问题全部消除）。
         lastMeasuredRmsDb = measuredDb
 
         // 静音/极弱段落冻结 AGC，不追着静音抬增益（否则底噪被放大）。
+        // 官方测量静音下限约 -9600mB = -96dBFS，远低于 -55dBFS 阈值，正确冻结。
         if (measuredDb < AGC_SILENCE_RMS_DB) return
 
         val error = agcTargetRmsDb - measuredDb
@@ -1245,9 +1239,16 @@ class MainActivity : AudioServiceActivity() {
     }
 
     private fun stopLoudnessAgc() {
+        // 停掉后台轮询线程，避免 handler 持有已 release 的 visualizer。
+        agcMeasureHandler?.removeCallbacksAndMessages(null)
+        agcMeasureHandler = null
+        // 必须用 quit() 而非 quitSafely()：后者会保留 400ms 延迟消息直到到期，
+        // 到那时 visualizer 已 release，poll 会拿着失效句柄调用 binder。
+        agcMeasureThread?.quit()
+        agcMeasureThread = null
         loudnessVisualizer?.runCatching {
             enabled = false
-            setDataCaptureListener(null, 0, false, false)
+            setMeasurementMode(Visualizer.MEASUREMENT_MODE_NONE)
             release()
         }
         loudnessVisualizer = null
