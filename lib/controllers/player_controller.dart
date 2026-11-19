@@ -8,6 +8,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/painting.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:just_audio/just_audio.dart';
+import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../core/shuffle_cycle.dart';
@@ -28,6 +29,30 @@ import 'download_controller.dart';
 import 'local_music_controller.dart';
 
 enum PlaybackMode { playlistLoop, shuffle, singleLoop }
+
+/// 音量均衡的增益策略。
+/// - off：关闭均衡（原生释放效果器）。
+/// - fixed：固定增益档位（旧行为，不需要录音权限）。
+/// - auto：实时响度 AGC，按每首歌实际音量自动调增益（需 RECORD_AUDIO）。
+enum VolumeGainMode { fixed, auto }
+
+/// 自动增益的目标响度档位，映射到原生 DynamicsProcessing 的 targetRmsDb。
+/// 数值越接近 0 越响；-16dBFS 约等于流媒体常见响度，保留峰值余量给 limiter。
+enum AutoLoudnessLevel { gentle, standard, loud }
+
+extension AutoLoudnessLevelX on AutoLoudnessLevel {
+  double get targetRmsDb => switch (this) {
+    AutoLoudnessLevel.gentle => -20.0,
+    AutoLoudnessLevel.standard => -16.0,
+    AutoLoudnessLevel.loud => -12.0,
+  };
+
+  String get label => switch (this) {
+    AutoLoudnessLevel.gentle => '轻柔',
+    AutoLoudnessLevel.standard => '标准',
+    AutoLoudnessLevel.loud => '响亮',
+  };
+}
 
 /// 播放队列的来源（歌单 / 专辑）。
 ///
@@ -195,6 +220,8 @@ class PlayerController extends ChangeNotifier {
   static const _volumeNormalizationEnabledSettingKey =
       'settings.volume_normalization_enabled';
   static const _volumeGainDbSettingKey = 'settings.volume_gain_db';
+  static const _volumeGainModeSettingKey = 'settings.volume_gain_mode';
+  static const _autoLoudnessLevelSettingKey = 'settings.auto_loudness_level';
   static const _bluetoothLyricsEnabledSettingKey =
       'settings.bluetooth_lyrics_enabled';
   static const _keepScreenOnSettingKey = 'settings.keep_screen_on';
@@ -520,10 +547,21 @@ class PlayerController extends ChangeNotifier {
 
   /// 音量均衡的静态增益补偿（dB），下发到 DynamicsProcessing 的 MbcBand.postGain。
   /// 默认 +3dB：保持 2026-11-19 恢复增益补偿后的听感，不回退到上游的 0dB。
+  /// 仅在 [volumeGainMode] == fixed 时作为固定值生效；auto 模式下作为反馈环起点。
   double volumeGainDb = 3.0;
 
   /// 可选增益档位。越高越容易触发 limiter，可能重现上游 #153 的削顶/破音。
   static const volumeGainOptions = <double>[0.0, 3.0, 6.0, 9.0, 12.0];
+
+  /// 增益策略：fixed=固定档位；auto=按每首歌实际响度自动调（默认）。
+  /// auto 需要 RECORD_AUDIO 权限；拒绝时自动回退 fixed 并[notifyListeners]。
+  VolumeGainMode volumeGainMode = VolumeGainMode.auto;
+
+  /// 自动增益的目标响度档位。默认标准（-16dBFS）。
+  AutoLoudnessLevel autoLoudnessLevel = AutoLoudnessLevel.standard;
+
+  /// 实时 AGC 的最新快照，供设置页展示；auto 模式且原生支持时非空。
+  AgcStatus? agcStatus;
   bool bluetoothLyricsEnabled = false;
   // 普通蓝牙车机只读取 AVRCP 标题，不会读取手机上的歌词广播或 extras。
   bool bluetoothLyricsTitleSyncEnabled = true;
@@ -1496,6 +1534,58 @@ class PlayerController extends ChangeNotifier {
     await prefs.setDouble(_volumeGainDbSettingKey, gainDb);
     await _applyVolumeNormalization();
     notifyListeners();
+  }
+
+  /// 切换增益策略。切到 auto 时先申请 RECORD_AUDIO 权限，被拒则保持 fixed 并返回 false。
+  /// 返回是否成功切换到目标模式，供 UI 决定是否提示用户。
+  Future<bool> setVolumeGainMode(VolumeGainMode mode) async {
+    if (volumeGainMode == mode && (mode == VolumeGainMode.fixed || agcStatus?.active == true)) {
+      return true;
+    }
+    if (mode == VolumeGainMode.auto && isAudioEffectsSupported) {
+      final granted = await _ensureRecordAudioPermission();
+      if (!granted) {
+        // 录音权限被拒：保持 fixed 模式，避免 auto 静默失效。
+        volumeGainMode = VolumeGainMode.fixed;
+        notifyListeners();
+        return false;
+      }
+    }
+    volumeGainMode = mode;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_volumeGainModeSettingKey, mode.name);
+    await _applyVolumeNormalization();
+    notifyListeners();
+    return true;
+  }
+
+  /// 调整自动增益目标响度档位，立即重新下发 targetRmsDb 到原生效果器。
+  Future<void> setAutoLoudnessLevel(AutoLoudnessLevel level) async {
+    if (autoLoudnessLevel == level) return;
+    autoLoudnessLevel = level;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_autoLoudnessLevelSettingKey, level.name);
+    await _applyVolumeNormalization();
+    notifyListeners();
+  }
+
+  /// 申请 RECORD_AUDIO。已授权直接返回 true；永久拒绝时引导去设置页。
+  Future<bool> _ensureRecordAudioPermission() async {
+    if (!Platform.isAndroid) return false;
+    final status = await Permission.microphone.status;
+    if (status.isGranted) return true;
+    final result = await Permission.microphone.request();
+    if (result.isGranted) return true;
+    return false;
+  }
+
+  /// 拉取一次 AGC 快照（设置页轮询调用）。
+  Future<void> refreshAgcStatus() async {
+    if (!isAudioEffectsSupported || !volumeNormalizationEnabled) {
+      agcStatus = null;
+      return;
+    }
+    agcStatus = await _audioEffects.getAgcStatus();
   }
 
   /// 车载蓝牙歌词功能是否受支持（仅 Android）。
@@ -2775,6 +2865,20 @@ class PlayerController extends ChangeNotifier {
         prefs.getBool(_volumeNormalizationEnabledSettingKey) ??
         volumeNormalizationEnabled;
     volumeGainDb = prefs.getDouble(_volumeGainDbSettingKey) ?? volumeGainDb;
+    final savedGainMode = prefs.getString(_volumeGainModeSettingKey);
+    if (savedGainMode != null) {
+      volumeGainMode = VolumeGainMode.values.firstWhere(
+        (m) => m.name == savedGainMode,
+        orElse: () => VolumeGainMode.auto,
+      );
+    }
+    final savedLoudness = prefs.getString(_autoLoudnessLevelSettingKey);
+    if (savedLoudness != null) {
+      autoLoudnessLevel = AutoLoudnessLevel.values.firstWhere(
+        (l) => l.name == savedLoudness,
+        orElse: () => AutoLoudnessLevel.standard,
+      );
+    }
     bluetoothLyricsEnabled =
         prefs.getBool(_bluetoothLyricsEnabledSettingKey) ??
         bluetoothLyricsEnabled;
@@ -2898,12 +3002,21 @@ class PlayerController extends ChangeNotifier {
       return;
     }
 
+    final useAuto = volumeNormalizationEnabled &&
+        volumeGainMode == VolumeGainMode.auto;
     await _audioEffects.configureVolumeNormalization(
       audioSessionId:
           _androidAudioSessionId ?? audioPlayer.androidAudioSessionId,
       enabled: volumeNormalizationEnabled,
       gainDb: volumeGainDb,
+      autoGain: useAuto,
+      targetRmsDb: autoLoudnessLevel.targetRmsDb,
     );
+    if (useAuto) {
+      await refreshAgcStatus();
+    } else {
+      agcStatus = null;
+    }
   }
 
   void _syncListeningTimeTracker() {

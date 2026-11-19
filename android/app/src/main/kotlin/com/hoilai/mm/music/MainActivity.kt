@@ -19,6 +19,7 @@ import android.util.Log
 import android.media.audiofx.BassBoost
 import android.media.audiofx.Equalizer
 import android.media.audiofx.DynamicsProcessing
+import android.media.audiofx.Visualizer
 import android.view.WindowManager
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
@@ -31,6 +32,9 @@ import com.hchen.superlyricapi.SuperLyricData
 import com.hchen.superlyricapi.SuperLyricLine
 import com.hchen.superlyricapi.SuperLyricWord
 import java.io.File
+import kotlin.math.abs
+import kotlin.math.log10
+import kotlin.math.sqrt
 
 class MainActivity : AudioServiceActivity() {
     private val updateDownloads = mutableMapOf<Long, String>()
@@ -45,6 +49,18 @@ class MainActivity : AudioServiceActivity() {
     private var equalizerSessionId: Int? = null
     private var dynamicsProcessing: DynamicsProcessing? = null
     private var dynamicsProcessingSessionId: Int? = null
+
+    // 实时响度 AGC：Visualizer 边播边测 RMS，慢速反馈环动态调 MbcBand.postGain。
+    // 关键纪律：不改 preGain、不动 limiter；增益只在 [-8, +18] dB 内缓慢收敛，
+    // 死区 + 锁定避免把同一首歌内的强弱段落磨平（呼吸效应）。
+    private var loudnessVisualizer: Visualizer? = null
+    private var agcEnabled = false
+    private var agcCurrentGainDb = DEFAULT_VOLUME_GAIN_DB
+    private var agcTargetRmsDb = DEFAULT_TARGET_RMS_DB
+    private var agcLocked = false
+    private var agcStableCycles = 0
+    private var lastMeasuredRmsDb = 0.0f
+    private var agcLastSampleAtMs = 0L
     private var pendingPermissionResult: MethodChannel.Result? = null
     private var deepLinkChannel: MethodChannel? = null
     private var initialDeepLink: String? = null
@@ -55,6 +71,22 @@ class MainActivity : AudioServiceActivity() {
         private const val TAG_BLUETOOTH_LYRICS = "BluetoothLyrics"
         private const val TAG_VOLUME_NORMALIZATION = "VolumeNormalization"
         private const val DEFAULT_VOLUME_GAIN_DB = 3.0f
+
+        // AGC 目标 RMS（dBFS）。-16dBFS ≈ 流媒体常见响度，留 4dB 峰值余量给 limiter。
+        private const val DEFAULT_TARGET_RMS_DB = -16.0f
+        private const val AGC_MIN_GAIN_DB = -8.0f
+        private const val AGC_MAX_GAIN_DB = 18.0f
+        // 采样窗口 400ms；每步最多调整 0.6dB，约 5~15 秒收敛到目标，避免"呼吸效应"。
+        private const val AGC_SAMPLE_INTERVAL_MS = 400L
+        // Visualizer 回调频率（Hz）：20Hz 采集，回调里按 400ms 节流处理。
+        private const val AGC_CALLBACK_RATE_HZ = 20
+        private const val AGC_MAX_STEP_DB = 0.6f
+        private const val AGC_DEADZONE_DB = 0.8f
+        // 增益进入死区后连续 N 次采样才锁定；偏离超过阈值 N 次才重新解锁。
+        private const val AGC_LOCK_CYCLES = 12
+        private const val AGC_UNLOCK_CYCLES = 3
+        // 低于此 RMS 视为静音/弱段落，冻结 AGC，不追着静音段抬增益。
+        private const val AGC_SILENCE_RMS_DB = -55.0f
     }
 
     private val downloadReceiver = object : BroadcastReceiver() {
@@ -217,14 +249,36 @@ class MainActivity : AudioServiceActivity() {
                         val gainDb =
                             (call.argument<Double>("gainDb") ?: DEFAULT_VOLUME_GAIN_DB.toDouble())
                                 .toFloat()
+                        val autoGain = call.argument<Boolean>("autoGain") ?: false
+                        val targetRmsDb =
+                            (call.argument<Double>("targetRmsDb")
+                                ?: DEFAULT_TARGET_RMS_DB.toDouble()).toFloat()
 
                         runCatching {
-                            configureVolumeNormalization(audioSessionId, enabled, gainDb)
+                            configureVolumeNormalization(
+                                audioSessionId, enabled, gainDb, autoGain, targetRmsDb
+                            )
                         }.onSuccess { supported ->
                             result.success(supported)
                         }.onFailure { error ->
+                            stopLoudnessAgc()
                             releaseDynamicsProcessing()
                             result.error("volume_normalization_failed", error.message, null)
+                        }
+                    }
+                    "getAgcStatus" -> {
+                        runCatching {
+                            mapOf<String, Any>(
+                                "active" to agcEnabled,
+                                "gainDb" to agcCurrentGainDb.toDouble(),
+                                "measuredRmsDb" to lastMeasuredRmsDb.toDouble(),
+                                "targetRmsDb" to agcTargetRmsDb.toDouble(),
+                                "locked" to agcLocked,
+                            )
+                        }.onSuccess { status ->
+                            result.success(status)
+                        }.onFailure { error ->
+                            result.error("agc_status_failed", error.message, null)
                         }
                     }
                     else -> result.notImplemented()
@@ -893,9 +947,12 @@ class MainActivity : AudioServiceActivity() {
     private fun configureVolumeNormalization(
         audioSessionId: Int?,
         enabled: Boolean,
-        gainDb: Float = DEFAULT_VOLUME_GAIN_DB
+        gainDb: Float = DEFAULT_VOLUME_GAIN_DB,
+        autoGain: Boolean = false,
+        targetRmsDb: Float = DEFAULT_TARGET_RMS_DB
     ): Boolean {
         if (!enabled) {
+            stopLoudnessAgc()
             releaseDynamicsProcessing()
             return true
         }
@@ -909,76 +966,222 @@ class MainActivity : AudioServiceActivity() {
         try {
             Log.d(
                 TAG_VOLUME_NORMALIZATION,
-                "configure: enabled=$enabled gainDb=$gainDb session=$audioSessionId"
+                "configure: enabled=$enabled autoGain=$autoGain gainDb=$gainDb " +
+                    "targetRmsDb=$targetRmsDb session=$audioSessionId"
             )
-            val effect = if (dynamicsProcessingSessionId == audioSessionId && dynamicsProcessing != null) {
-                dynamicsProcessing!!
-            } else {
-                releaseDynamicsProcessing()
+            val effect = ensureDynamicsProcessing(audioSessionId)
 
-                val config = DynamicsProcessing.Config.Builder(
-                    DynamicsProcessing.VARIANT_FAVOR_FREQUENCY_RESOLUTION,
-                    2, // channels
-                    false, // preEq
-                    0,
-                    true, // mbc
-                    1, // 1 band compressor
-                    false, // postEq
-                    0,
-                    true // limiter
-                ).build()
-
-                DynamicsProcessing(0, audioSessionId, config).also {
-                    dynamicsProcessing = it
-                    dynamicsProcessingSessionId = audioSessionId
-                }
-            }
-
-            // 纯在线流无法做逐曲响度归一化（播放前拿不到整曲 LUFS），
-            // 因此用「静态补偿 + 末端限幅」近似：低电平歌曲净得 gainDb，
-            // 高电平歌曲峰值由下方 limiter(-1dB/10:1) 兜住，形成抬底不削峰的准均衡。
-            // gainDb 由设置页「音量增益」下发（默认 +3dB，可选 0/+3/+6/+9/+12）。
-            // preGain 恒为 0：推高压缩器输入会被 2:1 压缩吃掉，且容易重现上游 #153
-            //「打开音量均衡后首次播放变电流声」。档位越高越依赖 limiter，可能削顶/破音。
-            val mbcBand = DynamicsProcessing.MbcBand(
-                true, // enabled
-                20000.0f, // cutoffFrequency
-                50.0f, // attackTime
-                300.0f, // releaseTime
-                2.0f, // ratio: 2:1，温和动态压缩
-                -16.0f, // threshold: -16dB
-                6.0f, // kneeWidth: 6dB 软拐点平滑过渡
-                -60.0f, // noiseGateThreshold
-                1.0f, // expanderRatio
-                0.0f, // preGain: 0dB，不额外推高压缩器输入
-                gainDb // postGain: 压缩后 makeup gain，由设置页下发
-            )
-
-            val limiter = DynamicsProcessing.Limiter(
-                true, // inUse
-                true, // enabled
-                0, // linkGroup
-                1.0f, // attackTime
-                100.0f, // releaseTime
-                10.0f, // ratio
-                -1.0f, // threshold
-                0.0f // postGain
-            )
-
-            for (c in 0 until 2) {
-                effect.setMbcBandByChannelIndex(c, 0, mbcBand)
-                effect.setLimiterByChannelIndex(c, limiter)
-            }
-
+            // 静态模式：postGain 固定为设置页下发的 gainDb（旧行为，权限被拒时的兜底）。
+            // 自动模式：postGain 由 AGC 反馈环维护，先把起点设为 gainDb。
+            agcTargetRmsDb = targetRmsDb.coerceIn(AGC_MIN_GAIN_DB, AGC_MAX_GAIN_DB)
+            val initialGain = if (autoGain) gainDb.coerceIn(AGC_MIN_GAIN_DB, AGC_MAX_GAIN_DB) else gainDb
+            agcCurrentGainDb = initialGain
+            applyMbcAndLimiter(effect, initialGain)
             effect.enabled = true
+
+            if (autoGain) {
+                startLoudnessAgc(audioSessionId)
+            } else {
+                stopLoudnessAgc()
+            }
             return true
         } catch (e: Exception) {
+            stopLoudnessAgc()
             releaseDynamicsProcessing()
             return false
         }
     }
 
+    private fun ensureDynamicsProcessing(audioSessionId: Int): DynamicsProcessing {
+        if (dynamicsProcessingSessionId == audioSessionId && dynamicsProcessing != null) {
+            return dynamicsProcessing!!
+        }
+        releaseDynamicsProcessing()
+        val config = DynamicsProcessing.Config.Builder(
+            DynamicsProcessing.VARIANT_FAVOR_FREQUENCY_RESOLUTION,
+            2, // channels
+            false, // preEq
+            0,
+            true, // mbc
+            1, // 1 band compressor
+            false, // postEq
+            0,
+            true // limiter
+        ).build()
+        return DynamicsProcessing(0, audioSessionId, config).also {
+            dynamicsProcessing = it
+            dynamicsProcessingSessionId = audioSessionId
+        }
+    }
+
+    /// 写入 MBC + limiter。postGain 由调用方决定：静态=固定档位，自动=AGC 当前增益。
+    /// preGain 恒为 0：推高压缩器输入会被 2:1 压缩吃掉，且容易重现上游 #153
+    ///「打开音量均衡后首次播放变电流声」。limiter(-1dB/10:1) 兜住峰值。
+    private fun applyMbcAndLimiter(effect: DynamicsProcessing, postGainDb: Float) {
+        val mbcBand = DynamicsProcessing.MbcBand(
+            true, // enabled
+            20000.0f, // cutoffFrequency
+            50.0f, // attackTime
+            300.0f, // releaseTime
+            2.0f, // ratio: 2:1，温和动态压缩
+            -16.0f, // threshold: -16dB
+            6.0f, // kneeWidth: 6dB 软拐点平滑过渡
+            -60.0f, // noiseGateThreshold
+            1.0f, // expanderRatio
+            0.0f, // preGain: 0dB，不额外推高压缩器输入
+            postGainDb // postGain: 静态档位或 AGC 动态值
+        )
+
+        val limiter = DynamicsProcessing.Limiter(
+            true, // inUse
+            true, // enabled
+            0, // linkGroup
+            1.0f, // attackTime
+            100.0f, // releaseTime
+            10.0f, // ratio
+            -1.0f, // threshold
+            0.0f // postGain
+        )
+
+        for (c in 0 until 2) {
+            effect.setMbcBandByChannelIndex(c, 0, mbcBand)
+            effect.setLimiterByChannelIndex(c, limiter)
+        }
+    }
+
+    // ---------- 实时响度 AGC ----------
+    // Visualizer 挂在同一 audioSessionId 上，读到的是经过 DynamicsProcessing 之后的混音。
+    // 因此形成闭环：调 postGain → 输出电平变化 → Visualizer 测得变化。慢速收敛避免磨平
+    // 同一首歌内的动态（呼吸效应），死区 + 锁定避免增益在临界点来回抖动。
+
+    private fun startLoudnessAgc(audioSessionId: Int) {
+        stopLoudnessAgc()
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
+            != PackageManager.PERMISSION_GRANTED
+        ) {
+            Log.w(TAG_VOLUME_NORMALIZATION, "AGC skipped: RECORD_AUDIO permission not granted")
+            return
+        }
+        try {
+            val visualizer = Visualizer(audioSessionId)
+            // 必须关掉自动缩放（SCALING_MODE_NONE=0），否则 getWaveForm 返回的是
+            // 归一化到满幅的数据，测不到真实响度。用字面值 0 规避 preview SDK 符号解析问题。
+            visualizer.scalingMode = 0
+            visualizer.setDataCaptureListener(
+                object : Visualizer.OnDataCaptureListener {
+                    override fun onWaveFormDataCapture(
+                        visualizer: Visualizer?,
+                        waveform: ByteArray?,
+                        samplingRate: Int
+                    ) {
+                        if (waveform != null) onAgcWaveform(waveform)
+                    }
+
+                    override fun onFftDataCapture(
+                        visualizer: Visualizer?,
+                        fft: ByteArray?,
+                        samplingRate: Int
+                    ) {
+                    }
+                },
+                AGC_CALLBACK_RATE_HZ,
+                true, // waveform
+                false // fft
+            )
+            visualizer.enabled = true
+            loudnessVisualizer = visualizer
+            agcEnabled = true
+            agcLocked = false
+            agcStableCycles = 0
+            agcLastSampleAtMs = 0L
+            Log.d(TAG_VOLUME_NORMALIZATION, "AGC started: session=$audioSessionId")
+        } catch (e: Exception) {
+            Log.w(TAG_VOLUME_NORMALIZATION, "AGC start failed: ${e.message}")
+            stopLoudnessAgc()
+        }
+    }
+
+    private fun onAgcWaveform(waveform: ByteArray) {
+        if (!agcEnabled) return
+        val now = android.os.SystemClock.elapsedRealtime()
+        if (now - agcLastSampleAtMs < AGC_SAMPLE_INTERVAL_MS) return
+        agcLastSampleAtMs = now
+
+        // getWaveForm 返回 8bit 有符号采样（静音=0 附近）。转 RMS 再转 dBFS。
+        var sumSquares = 0.0
+        var count = 0
+        for (sample in waveform) {
+            val normalized = sample.toInt() / 128.0
+            sumSquares += normalized * normalized
+            count++
+        }
+        if (count == 0) return
+        val rms = sqrt(sumSquares / count)
+        if (rms < 1e-5) return
+        val measuredDb = (20.0 * log10(rms)).toFloat()
+        lastMeasuredRmsDb = measuredDb
+
+        // 静音/极弱段落冻结 AGC，不追着静音抬增益（否则底噪被放大）。
+        if (measuredDb < AGC_SILENCE_RMS_DB) return
+
+        val error = agcTargetRmsDb - measuredDb
+        val absError = abs(error)
+
+        if (agcLocked) {
+            if (absError > AGC_DEADZONE_DB * 2) {
+                agcStableCycles++
+                if (agcStableCycles >= AGC_UNLOCK_CYCLES) {
+                    agcLocked = false
+                    agcStableCycles = 0
+                    Log.d(TAG_VOLUME_NORMALIZATION, "AGC unlock: measured=${measuredDb}dB")
+                }
+            } else {
+                agcStableCycles = 0
+            }
+            return
+        }
+
+        if (absError <= AGC_DEADZONE_DB) {
+            agcStableCycles++
+            if (agcStableCycles >= AGC_LOCK_CYCLES) {
+                agcLocked = true
+                agcStableCycles = 0
+                Log.d(
+                    TAG_VOLUME_NORMALIZATION,
+                    "AGC locked: gain=${agcCurrentGainDb}dB measured=${measuredDb}dB"
+                )
+            }
+            return
+        }
+
+        agcStableCycles = 0
+        // 每步最多 ±0.6dB，慢慢逼近目标值。
+        val step = error.coerceIn(-AGC_MAX_STEP_DB, AGC_MAX_STEP_DB)
+        val nextGain = (agcCurrentGainDb + step).coerceIn(AGC_MIN_GAIN_DB, AGC_MAX_GAIN_DB)
+        if (abs(nextGain - agcCurrentGainDb) < 0.01f) return
+        agcCurrentGainDb = nextGain
+        dynamicsProcessing?.let { applyMbcAndLimiter(it, agcCurrentGainDb) }
+        Log.d(
+            TAG_VOLUME_NORMALIZATION,
+            "AGC pulse: gain=${agcCurrentGainDb}dB measured=${measuredDb}dB " +
+                "target=${agcTargetRmsDb}dB err=${error}dB"
+        )
+    }
+
+    private fun stopLoudnessAgc() {
+        loudnessVisualizer?.runCatching {
+            enabled = false
+            setDataCaptureListener(null, 0, false, false)
+            release()
+        }
+        loudnessVisualizer = null
+        agcEnabled = false
+        agcLocked = false
+        agcStableCycles = 0
+    }
+
     private fun releaseDynamicsProcessing() {
+        stopLoudnessAgc()
         dynamicsProcessing?.runCatching {
             enabled = false
             release()

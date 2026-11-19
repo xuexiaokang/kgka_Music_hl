@@ -48,10 +48,135 @@ class SettingsPage extends StatelessWidget {
 
   String _gainLabel(double gain) {
     if (gain == 0) return '0 dB（不增益）';
-    return '+${gain.toStringAsFixed(0)} dB';
+    return '+${gain.toStringAsFixed(1)} dB';
   }
 
-  Future<void> _selectVolumeGain(
+  /// 选择增益策略：自动（按每首歌响度自适应）/ 固定档位。
+  Future<void> _selectVolumeGainMode(
+    BuildContext context,
+    PlayerController player,
+  ) async {
+    final selected = await showModalBottomSheet<VolumeGainMode>(
+      context: context,
+      showDragHandle: true,
+      backgroundColor: Theme.of(context).colorScheme.surface,
+      builder: (sheetContext) {
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  '音量均衡策略',
+                  style: Theme.of(sheetContext).textTheme.titleLarge?.copyWith(
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  '自动：逐首测量实际响度，动态适配增益（需录音权限，仅读混音不采麦克风）。'
+                  '固定：所有歌曲统一加固定 dB，无需权限。',
+                  style: Theme.of(sheetContext).textTheme.bodyMedium,
+                ),
+                const SizedBox(height: 8),
+                ListTile(
+                  leading: const Icon(Icons.auto_awesome_rounded),
+                  title: const Text('自动适配（推荐）'),
+                  subtitle: const Text('按每首歌音量自动调整，响的歌少加、轻的歌多加'),
+                  trailing: player.volumeGainMode == VolumeGainMode.auto
+                      ? Icon(
+                          Icons.check_rounded,
+                          color: Theme.of(sheetContext).colorScheme.primary,
+                        )
+                      : null,
+                  onTap: () => Navigator.of(sheetContext).pop(VolumeGainMode.auto),
+                ),
+                ListTile(
+                  leading: const Icon(Icons.tune_rounded),
+                  title: const Text('固定增益'),
+                  subtitle: const Text('所有歌曲统一增益档位'),
+                  trailing: player.volumeGainMode == VolumeGainMode.fixed
+                      ? Icon(
+                          Icons.check_rounded,
+                          color: Theme.of(sheetContext).colorScheme.primary,
+                        )
+                      : null,
+                  onTap: () => Navigator.of(sheetContext).pop(VolumeGainMode.fixed),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+
+    if (selected == null) return;
+    final ok = await player.setVolumeGainMode(selected);
+    if (!ok) {
+      Toast.error('未获得录音权限，已保持固定增益模式');
+    }
+  }
+
+  /// 选择自动增益的目标响度。
+  Future<void> _selectAutoLoudness(
+    BuildContext context,
+    PlayerController player,
+  ) async {
+    final selected = await showModalBottomSheet<AutoLoudnessLevel>(
+      context: context,
+      showDragHandle: true,
+      backgroundColor: Theme.of(context).colorScheme.surface,
+      builder: (sheetContext) {
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  '目标响度',
+                  style: Theme.of(sheetContext).textTheme.titleLarge?.copyWith(
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  'AGC 会把每首歌调整到接近该响度。标准档最接近主流流媒体；'
+                  '响亮档更响但可能触及限幅。',
+                  style: Theme.of(sheetContext).textTheme.bodyMedium,
+                ),
+                const SizedBox(height: 8),
+                for (final level in AutoLoudnessLevel.values) ...[
+                  ListTile(
+                    title: Text(
+                      '${level.label}（${level.targetRmsDb.toStringAsFixed(0)} dBFS）',
+                    ),
+                    trailing: player.autoLoudnessLevel == level
+                        ? Icon(
+                            Icons.check_rounded,
+                            color: Theme.of(sheetContext).colorScheme.primary,
+                          )
+                        : null,
+                    onTap: () => Navigator.of(sheetContext).pop(level),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        );
+      },
+    );
+
+    if (selected != null) {
+      await player.setAutoLoudnessLevel(selected);
+    }
+  }
+
+  /// 固定增益档位选择（旧行为，保留给 fixed 模式）。
+  Future<void> _selectFixedGain(
     BuildContext context,
     PlayerController player,
   ) async {
@@ -76,15 +201,14 @@ class SettingsPage extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  '音量增益',
+                  '固定增益',
                   style: Theme.of(sheetContext).textTheme.titleLarge?.copyWith(
                     fontWeight: FontWeight.w900,
                   ),
                 ),
                 const SizedBox(height: 8),
                 Text(
-                  '仅对音量均衡生效。增益越高声音越大，但也越容易触发限幅或破音；'
-                  '建议从 +6 dB 开始试。',
+                  '所有歌曲统一增加一个固定 dB。增益越高越容易触发限幅；建议从 +6 dB 开始试。',
                   style: Theme.of(sheetContext).textTheme.bodyMedium,
                 ),
                 const SizedBox(height: 8),
@@ -443,15 +567,56 @@ class SettingsPage extends StatelessWidget {
                       value: player.volumeNormalizationEnabled,
                       onChanged: player.setVolumeNormalizationEnabled,
                     ),
-                    if (player.volumeNormalizationEnabled)
+                    if (player.volumeNormalizationEnabled) ...[
                       _SettingsTile(
-                        icon: Icons.tune_rounded,
+                        icon: player.volumeGainMode == VolumeGainMode.auto
+                            ? Icons.auto_awesome_rounded
+                            : Icons.tune_rounded,
                         iconColor: colorScheme.primary,
-                        title: '音量增益',
-                        subtitle:
-                            '当前 ${_gainLabel(player.volumeGainDb)} · 提升低电平歌曲，过高可能破音',
-                        onTap: () => _selectVolumeGain(context, player),
+                        title: '音量增益策略',
+                        subtitle: player.volumeGainMode == VolumeGainMode.auto
+                            ? '自动适配 · 按每首歌响度动态调整'
+                            : '固定增益 · ${_gainLabel(player.volumeGainDb)}',
+                        onTap: () => _selectVolumeGainMode(context, player),
                       ),
+                      if (player.volumeGainMode == VolumeGainMode.auto) ...[
+                        _SettingsDivider(),
+                        _SettingsTile(
+                          icon: Icons.equalizer_rounded,
+                          iconColor: colorScheme.primary,
+                          title: '目标响度',
+                          subtitle:
+                              '${player.autoLoudnessLevel.label} · ${player.autoLoudnessLevel.targetRmsDb.toStringAsFixed(0)} dBFS'
+                              '（数值越大越响）',
+                          onTap: () => _selectAutoLoudness(context, player),
+                        ),
+                        _SettingsTile(
+                          icon: Icons.analytics_outlined,
+                          iconColor: colorScheme.primary,
+                          title: '实时增益',
+                          subtitle: player.agcStatus == null
+                              ? '正在测量当前歌曲响度…'
+                              : !player.agcStatus!.active
+                              ? '自动增益未激活 · 请确认录音权限'
+                              : '当前 ${_gainLabel(player.agcStatus!.gainDb)}'
+                                  ' · 测得 ${player.agcStatus!.measuredRmsDb.toStringAsFixed(1)} dBFS'
+                                  '${player.agcStatus!.locked ? ' · 已稳定' : ' · 调节中'}',
+                          onTap: () async {
+                            await player.refreshAgcStatus();
+                          },
+                        ),
+                      ] else ...[
+                        _SettingsDivider(),
+                        _SettingsTile(
+                          icon: Icons.tune_rounded,
+                          iconColor: colorScheme.primary,
+                          title: '固定增益',
+                          subtitle:
+                              '当前 ${_gainLabel(player.volumeGainDb)} · 过高可能破音',
+                          onTap: () => _selectFixedGain(context, player),
+                        ),
+                      ],
+                    ],
                     _SettingsDivider(),
                     _SettingsTile(
                       icon: Icons.graphic_eq_rounded,

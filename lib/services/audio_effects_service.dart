@@ -145,6 +145,8 @@ class AudioEffectsService {
     required int? audioSessionId,
     required bool enabled,
     double gainDb = 3.0,
+    bool autoGain = false,
+    double targetRmsDb = -16.0,
   }) async {
     if (!isAudioEffectsSupported) {
       return false;
@@ -155,6 +157,8 @@ class AudioEffectsService {
         'audioSessionId': audioSessionId,
         'enabled': enabled,
         'gainDb': gainDb,
+        'autoGain': autoGain,
+        'targetRmsDb': targetRmsDb,
       });
       return result ?? false;
     } on PlatformException catch (error) {
@@ -163,5 +167,52 @@ class AudioEffectsService {
     } on MissingPluginException {
       return false;
     }
+  }
+
+  /// 查询 AGC 实时状态（是否激活、当前增益、测得响度、是否锁定）。
+  /// 仅 Android 且音量均衡开启时有效；不支持时返回 null。
+  Future<AgcStatus?> getAgcStatus() async {
+    if (!isAudioEffectsSupported) {
+      return null;
+    }
+    try {
+      final result = await _channel.invokeMethod<Map<Object?, Object?>>('getAgcStatus');
+      if (result == null) {
+        return null;
+      }
+      return AgcStatus.fromMap(result);
+    } on PlatformException catch (error) {
+      debugPrint('[KA Music][audio-effects] getAgcStatus failed: $error');
+      return null;
+    } on MissingPluginException {
+      return null;
+    }
+  }
+}
+
+/// 实时响度 AGC 的快照，用于设置页展示「当前增益 / 测得响度」。
+class AgcStatus {
+  const AgcStatus({
+    required this.active,
+    required this.gainDb,
+    required this.measuredRmsDb,
+    required this.targetRmsDb,
+    required this.locked,
+  });
+
+  final bool active;
+  final double gainDb;
+  final double measuredRmsDb;
+  final double targetRmsDb;
+  final bool locked;
+
+  factory AgcStatus.fromMap(Map<Object?, Object?> map) {
+    return AgcStatus(
+      active: map['active'] as bool? ?? false,
+      gainDb: (map['gainDb'] as num?)?.toDouble() ?? 0.0,
+      measuredRmsDb: (map['measuredRmsDb'] as num?)?.toDouble() ?? 0.0,
+      targetRmsDb: (map['targetRmsDb'] as num?)?.toDouble() ?? -16.0,
+      locked: map['locked'] as bool? ?? false,
+    );
   }
 }
