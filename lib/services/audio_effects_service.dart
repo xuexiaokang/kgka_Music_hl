@@ -211,6 +211,26 @@ class AudioEffectsService {
     }
   }
 
+  /// 切歌归位：在下一首真正出声之前同步 await 调用，把原生 AGC 的 postGain
+  /// 立即打回基准档位并清掉上一首的收敛状态，消除「轻歌高增益被带到响歌」的爆音窗口。
+  /// 原生侧只写一次 postGain + 清内存状态，不重建效果器 / Visualizer，不会卡顿。
+  Future<bool> resetAgcForTrackChange({double gainDb = 3.0}) async {
+    if (!isAudioEffectsSupported) {
+      return false;
+    }
+    try {
+      final result = await _channel.invokeMethod<bool>('resetAgcForTrackChange', {
+        'gainDb': gainDb,
+      });
+      return result ?? false;
+    } on PlatformException catch (error) {
+      debugPrint('[KA Music][audio-effects] resetAgcForTrackChange failed: $error');
+      return false;
+    } on MissingPluginException {
+      return false;
+    }
+  }
+
   /// 查询 AGC 实时状态（是否激活、当前增益、测得响度、是否锁定）。
   /// 仅 Android 且音量均衡开启时有效；不支持时返回 null。
   Future<AgcStatus?> getAgcStatus() async {

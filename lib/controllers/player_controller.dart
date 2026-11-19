@@ -927,6 +927,15 @@ class PlayerController extends ChangeNotifier {
         if (wasPlaying) {
           unawaited(audioPlayer.setVolume(1.0));
         }
+        // 切歌归位：新歌真正出声前，把 AGC 增益从上一首的收敛值同步打回中性 0dB，
+        // 消除「轻歌被推高增益 → 切到响歌开头爆音」的竞态窗口。必须 await 完成再 play。
+        // 归位到 0（而非固定增益档）：auto 模式从零起步，响歌往下减、轻歌往上加，
+        // 避免响歌一上来被固定档放大、AGC 再一路狂减造成「减了非常多增益」的观感。
+        // 只在 auto 模式有意义（fixed 模式 postGain 本就是固定档位，不归位）。
+        if (volumeNormalizationEnabled &&
+            volumeGainMode == VolumeGainMode.auto) {
+          await _audioEffects.resetAgcForTrackChange(gainDb: 0);
+        }
         await _startPlayback(expectedIntent: intentSerial);
         if (requestSerial != _playRequestSerial) return;
         unawaited(_applyVolumeNormalization());

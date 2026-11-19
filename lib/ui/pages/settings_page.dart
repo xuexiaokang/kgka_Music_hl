@@ -29,6 +29,14 @@ import 'playback_history_page.dart';
 import 'playback_stats_page.dart';
 import '../adaptive_layout.dart';
 
+/// 带符号的增益文本：正数显式带 +，负数用 toStringAsFixed 自带的 -，
+/// 避免把负增益显示成「+-8 dB」。
+String signedGainLabel(double gain, {int fractionDigits = 1}) {
+  if (gain == 0) return '0 dB（不增益）';
+  final sign = gain > 0 ? '+' : '';
+  return '$sign${gain.toStringAsFixed(fractionDigits)} dB';
+}
+
 class SettingsPage extends StatelessWidget {
   const SettingsPage({
     super.key,
@@ -49,10 +57,7 @@ class SettingsPage extends StatelessWidget {
   final CacheService? cache;
   final DownloadController? downloads;
 
-  String _gainLabel(double gain) {
-    if (gain == 0) return '0 dB（不增益）';
-    return '+${gain.toStringAsFixed(1)} dB';
-  }
+  String _gainLabel(double gain) => signedGainLabel(gain);
 
   /// 选择增益策略：自动（按每首歌响度自适应）/ 固定档位。
   Future<void> _selectVolumeGainMode(
@@ -79,7 +84,8 @@ class SettingsPage extends StatelessWidget {
                 ),
                 const SizedBox(height: 8),
                 Text(
-                  '自动：逐首测量实际响度，动态适配增益（需录音权限，仅读混音不采麦克风）。'
+                  '自动：逐首测量实际响度，只把偏轻的歌补上来，正常/偏响的歌保持原样'
+                  '（不减增益；需录音权限，仅读混音不采麦克风）。'
                   '固定：所有歌曲统一加固定 dB，无需权限。',
                   style: Theme.of(sheetContext).textTheme.bodyMedium,
                 ),
@@ -87,7 +93,7 @@ class SettingsPage extends StatelessWidget {
                 ListTile(
                   leading: const Icon(Icons.auto_awesome_rounded),
                   title: const Text('自动适配（推荐）'),
-                  subtitle: const Text('按每首歌音量自动调整，响的歌少加、轻的歌多加'),
+                  subtitle: const Text('偏轻的歌自动补增益，正常音量的歌不动'),
                   trailing: player.volumeGainMode == VolumeGainMode.auto
                       ? Icon(
                           Icons.check_rounded,
@@ -1625,9 +1631,7 @@ class _AgcLiveTileState extends State<_AgcLiveTile> {
   String _subtitle(AgcStatus? status) {
     if (status == null) return '正在测量当前歌曲响度…';
     if (!status.active) return '自动增益未激活 · 请确认录音权限';
-    final gain = status.gainDb == 0
-        ? '0 dB（不增益）'
-        : '+${status.gainDb.toStringAsFixed(0)} dB';
+    final gain = signedGainLabel(status.gainDb, fractionDigits: 0);
     return '当前 $gain'
         ' · 测得 ${status.measuredRmsDb.toStringAsFixed(1)} dBFS'
         '${status.locked ? ' · 已稳定' : ' · 调节中'}';
