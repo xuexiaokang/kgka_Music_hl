@@ -19,6 +19,8 @@ import android.os.Looper
 import android.provider.MediaStore
 import android.provider.Settings
 import android.util.Log
+import android.media.AudioManager
+import android.media.AudioTrack
 import android.media.audiofx.BassBoost
 import android.media.audiofx.Equalizer
 import android.media.audiofx.DynamicsProcessing
@@ -52,7 +54,8 @@ class MainActivity : AudioServiceActivity() {
     private var dynamicsProcessingSessionId: Int? = null
 
     // 实时响度 AGC：Visualizer 边播边测 RMS，前馈算出补到目标所需增益，慢速逼近。
-    // 关键纪律：不改 preGain、不动 limiter；增益只在 [0, +18] dB 内（只补不减），
+    // 关键纪律：只用 MBC 的 postGain 做增益（MBC 已退化为透明增益级，不做动态压缩），
+    // 增益只在 [0, +18] dB 内（只补不减）；limiter 仅兜峰值，不参与增益计算。
     // 死区 + 锁定避免把同一首歌内的强弱段落磨平（呼吸效应）。
     // 注意：这里不是闭环反馈——实测 Visualizer 测不到 DynamicsProcessing postGain
     // 之后的电平，若用「gain += error」积分律，误差符号恒定会把增益打满到限幅极值。
@@ -93,6 +96,18 @@ class MainActivity : AudioServiceActivity() {
         // 依据（测量点不含 postGain），又会把正常歌越调越小。
         private const val AGC_MIN_GAIN_DB = 0.0f
         private const val AGC_MAX_GAIN_DB = 18.0f
+
+        // 单 band MBC 的最高处理频率取设备输出采样率的 Nyquist：既保证全频通过，
+        // 也确保落在 native 层允许的合法范围内（传远超 Nyquist 的固定大值可能被拒绝，
+        // 导致整个音量均衡初始化失败）。只算一次并缓存。
+        private val mbcFullBandCutoffHz: Float by lazy {
+            val sampleRate = try {
+                AudioTrack.getNativeOutputSampleRate(AudioManager.STREAM_MUSIC)
+            } catch (e: Exception) {
+                48000
+            }
+            (if (sampleRate > 0) sampleRate else 48000) / 2.0f
+        }
         // RMS 轮询/调整周期 400ms；每步最多调整 0.6dB，约 5~15 秒收敛到目标，避免"呼吸效应"。
         private const val AGC_SAMPLE_INTERVAL_MS = 400L
         private const val AGC_MAX_STEP_DB = 0.6f
@@ -1055,7 +1070,7 @@ class MainActivity : AudioServiceActivity() {
             false, // preEq
             0,
             true, // mbc
-            1, // 1 band compressor
+            1, // 1 band：仅作为 limiter 之前的增益级，不做动态压缩
             false, // postEq
             0,
             true // limiter
@@ -1066,30 +1081,43 @@ class MainActivity : AudioServiceActivity() {
         }
     }
 
-    /// 写入 MBC + limiter。postGain 由调用方决定：静态=固定档位，自动=AGC 当前增益。
-    /// preGain 恒为 0：推高压缩器输入会被 2:1 压缩吃掉，且容易重现上游 #153
-    ///「打开音量均衡后首次播放变电流声」。limiter(-1dB/10:1) 兜住峰值。
+    /// 写入「纯增益级 + 峰值限幅」。postGain 由调用方决定：静态=固定档位，自动=AGC 当前增益。
+    ///
+    /// 音量均衡只需要补增益 + 防削波，不需要动态压缩。早期把 MBC 配成单 band 全频
+    /// 压缩器（threshold=-16dBFS / ratio=2:1 / release=300ms），而现代流媒体 RMS 普遍
+    /// -14~-9dBFS，压缩器几乎整首歌都在做 3~5dB 增益衰减；压缩量由全频总能量（中低频
+    /// 主导）驱动，会把电平很低的高频泛音/齿音/镲片一并压低且长时间抬不回来，听感就是
+    /// 「打开音量均衡后高频丢失、声音发闷」，还会反过来抵消 AGC 刚补上的增益。
+    /// 现把 MBC 退化为透明增益级，只留 postGain；preGain 恒为 0（推高压缩器输入曾重现
+    /// 上游 #153「首次播放变电流声」）。
+    /// 保留 MBC 而非把增益挪到 limiter.postGain：MBC 在 limiter 之前，补完增益后仍能
+    /// 被限幅兜住；limiter.postGain 在限幅之后，+18dB 会直接削波。
     private fun applyMbcAndLimiter(effect: DynamicsProcessing, postGainDb: Float) {
         val mbcBand = DynamicsProcessing.MbcBand(
             true, // enabled
-            20000.0f, // cutoffFrequency
-            50.0f, // attackTime
-            300.0f, // releaseTime
-            2.0f, // ratio: 2:1，温和动态压缩
-            -16.0f, // threshold: -16dB
-            6.0f, // kneeWidth: 6dB 软拐点平滑过渡
+            // cutoffFrequency 是「该 band 处理的最高频率」。单 band 下原值 20000Hz 会让
+            // 20kHz 以上完全不覆盖，且分频滤波器在 ~16kHz 就开始滚降。改为设备实际
+            // 输出采样率的 Nyquist：全频通过，且一定落在 native 层允许的合法范围内。
+            mbcFullBandCutoffHz,
+            1.0f, // attackTime（不压缩时无实际作用）
+            1.0f, // releaseTime
+            1.0f, // ratio: 1:1，不做动态压缩
+            0.0f, // threshold: 0dBFS —— 官方明确「threshold=0 表示不发生压缩」
+            0.0f, // kneeWidth: 0，无软拐点
             -60.0f, // noiseGateThreshold
-            1.0f, // expanderRatio
-            0.0f, // preGain: 0dB，不额外推高压缩器输入
-            postGainDb // postGain: 静态档位或 AGC 动态值
+            1.0f, // expanderRatio: 1:1，噪声门不工作
+            0.0f, // preGain: 0dB
+            postGainDb // 唯一有效项：静态档位或 AGC 动态增益
         )
 
+        // limiter 只兜住 0dBFS 附近的峰值，不做常态压缩。缩短 attack 以抓准高频瞬态，
+        // 缩短 release 以免峰值过后继续压低整段信号造成发闷。
         val limiter = DynamicsProcessing.Limiter(
             true, // inUse
             true, // enabled
             0, // linkGroup
-            1.0f, // attackTime
-            100.0f, // releaseTime
+            0.3f, // attackTime: 原 1.0ms，高频瞬态更快被兜住
+            50.0f, // releaseTime: 原 100ms，减少峰值后持续压低带来的闷感
             10.0f, // ratio
             -1.0f, // threshold
             0.0f // postGain
