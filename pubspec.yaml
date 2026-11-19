@@ -1,7 +1,7 @@
 name: kgka_music_hl
 description: "the best music application"
 publish_to: 'none'
-version: 2026.11.16+20266
+version: 2026.11.19+20267
 
 environment:
   sdk: ^3.11.5
