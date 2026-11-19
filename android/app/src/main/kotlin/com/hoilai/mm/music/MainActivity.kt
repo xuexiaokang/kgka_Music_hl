@@ -78,6 +78,10 @@ class MainActivity : AudioServiceActivity() {
 
         // AGC 目标 RMS（dBFS）。-16dBFS ≈ 流媒体常见响度，留 4dB 峰值余量给 limiter。
         private const val DEFAULT_TARGET_RMS_DB = -16.0f
+        // 响度目标（dBFS）的合法范围，与增益范围（AGC_MIN/MAX_GAIN_DB）是两回事。
+        // 之前误用增益范围 [-8,18] clamp 目标，把 -20/-16/-12 全抬到 -8，档位失效。
+        private const val AGC_MIN_TARGET_DBFS = -40.0f
+        private const val AGC_MAX_TARGET_DBFS = -3.0f
         private const val AGC_MIN_GAIN_DB = -8.0f
         private const val AGC_MAX_GAIN_DB = 18.0f
         // 采样窗口 400ms；每步最多调整 0.6dB，约 5~15 秒收敛到目标，避免"呼吸效应"。
@@ -997,7 +1001,7 @@ class MainActivity : AudioServiceActivity() {
 
             // 静态模式：postGain 固定为设置页下发的 gainDb（旧行为，权限被拒时的兜底）。
             // 自动模式：postGain 由 AGC 反馈环维护，先把起点设为 gainDb。
-            agcTargetRmsDb = targetRmsDb.coerceIn(AGC_MIN_GAIN_DB, AGC_MAX_GAIN_DB)
+            agcTargetRmsDb = targetRmsDb.coerceIn(AGC_MIN_TARGET_DBFS, AGC_MAX_TARGET_DBFS)
             val initialGain = if (autoGain) gainDb.coerceIn(AGC_MIN_GAIN_DB, AGC_MAX_GAIN_DB) else gainDb
             agcCurrentGainDb = initialGain
             applyMbcAndLimiter(effect, initialGain)
@@ -1087,7 +1091,7 @@ class MainActivity : AudioServiceActivity() {
     /// 轻量更新目标响度：只改字段并重置锁定状态，不重建效果器 / Visualizer。
     /// 供设置页切换响度档位调用，避免重建音频效果器带来的主线程 binder 阻塞。
     private fun setAgcTarget(targetRmsDb: Float): Boolean {
-        val clamped = targetRmsDb.coerceIn(AGC_MIN_GAIN_DB, AGC_MAX_GAIN_DB)
+        val clamped = targetRmsDb.coerceIn(AGC_MIN_TARGET_DBFS, AGC_MAX_TARGET_DBFS)
         agcTargetRmsDb = clamped
         // 目标变了，重新收敛：解锁并清掉稳定计数。
         agcLocked = false
@@ -1176,11 +1180,14 @@ class MainActivity : AudioServiceActivity() {
         if (now - agcLastSampleAtMs < AGC_SAMPLE_INTERVAL_MS) return
         agcLastSampleAtMs = now
 
-        // getWaveForm 返回 8bit 有符号采样（静音=0 附近）。转 RMS 再转 dBFS。
+        // getWaveForm 返回 8bit 无符号 PCM（0~255，静音基准=128）。
+        // 必须先减 128 转成有符号幅度（-128~127）再归一化，否则静音会被算成满幅 1.0
+        // → 测得 0dBFS，响度反馈完全失真（静音冻结失效、响歌反而加更多增益）。
         var sumSquares = 0.0
         var count = 0
         for (sample in waveform) {
-            val normalized = sample.toInt() / 128.0
+            val signed = (sample.toInt() and 0xFF) - 128
+            val normalized = signed / 128.0
             sumSquares += normalized * normalized
             count++
         }
