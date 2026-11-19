@@ -921,6 +921,10 @@ class MainActivity : AudioServiceActivity() {
                 }
             }
 
+            // 纯在线流无法做逐曲响度归一化（播放前拿不到整曲 LUFS），
+            // 因此用「静态补偿 + 末端限幅」近似：低电平歌曲净得约 +3dB，
+            // 高电平歌曲峰值由下方 limiter(-1dB/10:1) 兜住，形成抬底不削峰的准均衡。
+            // 不取 96b45bd 的 preGain2+postGain4=+6dB：那会重现「音量突变/削顶破音」。
             val mbcBand = DynamicsProcessing.MbcBand(
                 true, // enabled
                 20000.0f, // cutoffFrequency
@@ -931,8 +935,8 @@ class MainActivity : AudioServiceActivity() {
                 6.0f, // kneeWidth: 6dB 软拐点平滑过渡
                 -60.0f, // noiseGateThreshold
                 1.0f, // expanderRatio
-                0.0f, // preGain: 0dB
-                0.0f // postGain: 0dB，避免产生 6dB 音量突变或削顶破音
+                0.0f, // preGain: 0dB，不额外推高压缩器输入（否则增益会被 MBC 重新压回去）
+                3.0f // postGain: +3dB 增益补偿（压缩后 makeup gain）
             )
 
             val limiter = DynamicsProcessing.Limiter(
