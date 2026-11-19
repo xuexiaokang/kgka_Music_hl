@@ -1642,12 +1642,26 @@ class PlayerController extends ChangeNotifier {
   /// 拉取一次 AGC 快照（设置页点击「实时增益」或模式切换后调用）。
   Future<void> refreshAgcStatus() async {
     if (!isAudioEffectsSupported || !volumeNormalizationEnabled) {
-      agcStatus = null;
-      notifyListeners();
+      if (agcStatus != null) {
+        agcStatus = null;
+        notifyListeners();
+      }
       return;
     }
-    agcStatus = await _audioEffects.getAgcStatus();
+    final next = await _audioEffects.getAgcStatus();
+    // 轮询每 2 秒一次：值没变就不重建，避免无谓 notifyListeners 引发卡顿。
+    if (_agcStatusEquals(agcStatus, next)) return;
+    agcStatus = next;
     notifyListeners();
+  }
+
+  bool _agcStatusEquals(AgcStatus? a, AgcStatus? b) {
+    if (a == null || b == null) return a == b;
+    return a.active == b.active &&
+        a.locked == b.locked &&
+        (a.gainDb - b.gainDb).abs() < 0.05 &&
+        (a.measuredRmsDb - b.measuredRmsDb).abs() < 0.1 &&
+        (a.targetRmsDb - b.targetRmsDb).abs() < 0.05;
   }
 
   /// 车载蓝牙歌词功能是否受支持（仅 Android）。

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
 import '../widgets/liquid_glass_ui.dart';
@@ -10,6 +12,7 @@ import '../../controllers/download_controller.dart';
 import '../../controllers/player_controller.dart';
 import '../../controllers/theme_controller.dart';
 import '../../controllers/local_music_controller.dart';
+import '../../services/audio_effects_service.dart';
 import '../../services/app_update_service.dart';
 import '../../services/cache_service.dart';
 import '../../services/music_api.dart';
@@ -590,23 +593,7 @@ class SettingsPage extends StatelessWidget {
                               '（数值越大越响）',
                           onTap: () => _selectAutoLoudness(context, player),
                         ),
-                        _SettingsTile(
-                          icon: Icons.analytics_outlined,
-                          iconColor: colorScheme.primary,
-                          title: '实时增益',
-                          subtitle: player.agcStatus == null
-                              ? '正在测量当前歌曲响度…'
-                              : !player.agcStatus!.active
-                              ? '自动增益未激活 · 请确认录音权限'
-                              : '当前 ${_gainLabel(player.agcStatus!.gainDb)}'
-                                  ' · 测得 ${player.agcStatus!.measuredRmsDb.toStringAsFixed(1)} dBFS'
-                                  '${player.agcStatus!.locked ? ' · 已稳定' : ' · 调节中'}',
-                          // 不 await：刷新走 MethodChannel，避免点击后等待原生回复。
-                          // 结果由 refreshAgcStatus 内部 notifyListeners 驱动重建。
-                          onTap: () {
-                            player.refreshAgcStatus();
-                          },
-                        ),
+                        _AgcLiveTile(player: player, iconColor: colorScheme.primary),
                       ] else ...[
                         _SettingsDivider(),
                         _SettingsTile(
@@ -1593,6 +1580,67 @@ class _CacheItem extends StatelessWidget {
             ),
         ],
       ),
+    );
+  }
+}
+
+/// 实时增益 tile：页面可见期间低频轮询 AGC 快照。
+/// 之前只在点击/切模式时刷新，切歌后（audioSession 不变）数值一直是旧快照。
+/// 定时器随 widget 挂载/卸载，离开设置页即停止，无常驻耗电。
+class _AgcLiveTile extends StatefulWidget {
+  const _AgcLiveTile({
+    required this.player,
+    required this.iconColor,
+  });
+
+  final PlayerController player;
+  final Color iconColor;
+
+  @override
+  State<_AgcLiveTile> createState() => _AgcLiveTileState();
+}
+
+class _AgcLiveTileState extends State<_AgcLiveTile> {
+  Timer? _pollTimer;
+
+  @override
+  void initState() {
+    super.initState();
+    // 第一帧后拉一次，避免 initState 阶段 notifyListeners 触发依赖重建。
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) widget.player.refreshAgcStatus();
+    });
+    // 每 2 秒轮询：切歌时 audioSession 不变也能刷新出真实收敛值。
+    _pollTimer = Timer.periodic(const Duration(seconds: 2), (_) {
+      if (mounted) widget.player.refreshAgcStatus();
+    });
+  }
+
+  @override
+  void dispose() {
+    _pollTimer?.cancel();
+    super.dispose();
+  }
+
+  String _subtitle(AgcStatus? status) {
+    if (status == null) return '正在测量当前歌曲响度…';
+    if (!status.active) return '自动增益未激活 · 请确认录音权限';
+    final gain = status.gainDb == 0
+        ? '0 dB（不增益）'
+        : '+${status.gainDb.toStringAsFixed(0)} dB';
+    return '当前 $gain'
+        ' · 测得 ${status.measuredRmsDb.toStringAsFixed(1)} dBFS'
+        '${status.locked ? ' · 已稳定' : ' · 调节中'}';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return _SettingsTile(
+      icon: Icons.analytics_outlined,
+      iconColor: widget.iconColor,
+      title: '实时增益',
+      subtitle: _subtitle(widget.player.agcStatus),
+      onTap: () => widget.player.refreshAgcStatus(),
     );
   }
 }
