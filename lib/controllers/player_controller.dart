@@ -1519,21 +1519,27 @@ class PlayerController extends ChangeNotifier {
   Future<void> setVolumeNormalizationEnabled(bool enabled) async {
     if (volumeNormalizationEnabled == enabled) return;
     volumeNormalizationEnabled = enabled;
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool(_volumeNormalizationEnabledSettingKey, enabled);
-    await _applyVolumeNormalization();
     notifyListeners();
+    unawaited(() async {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool(_volumeNormalizationEnabledSettingKey, enabled);
+      await _applyVolumeNormalization();
+      notifyListeners();
+    }());
   }
 
-  /// 调整音量均衡的静态增益补偿，立即重新下发到原生效果器。
-  /// 增益只在音量均衡开启时生效；关闭时原生侧直接释放 DynamicsProcessing。
+  /// 调整音量均衡的静态增益补偿。
+  /// 先刷新 UI 再异步下发，避免效果器重建的 binder 调用阻塞设置菜单。
   Future<void> setVolumeGainDb(double gainDb) async {
     if (volumeGainDb == gainDb) return;
     volumeGainDb = gainDb;
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setDouble(_volumeGainDbSettingKey, gainDb);
-    await _applyVolumeNormalization();
     notifyListeners();
+    unawaited(() async {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setDouble(_volumeGainDbSettingKey, gainDb);
+      await _applyVolumeNormalization();
+      notifyListeners();
+    }());
   }
 
   /// 切换增益策略。切到 auto 时先申请 RECORD_AUDIO 权限，被拒则保持 fixed 并返回 false。
@@ -1552,21 +1558,35 @@ class PlayerController extends ChangeNotifier {
       }
     }
     volumeGainMode = mode;
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_volumeGainModeSettingKey, mode.name);
-    await _applyVolumeNormalization();
     notifyListeners();
+    unawaited(() async {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_volumeGainModeSettingKey, mode.name);
+      await _applyVolumeNormalization();
+      notifyListeners();
+    }());
     return true;
   }
 
-  /// 调整自动增益目标响度档位，立即重新下发 targetRmsDb 到原生效果器。
+  /// 调整自动增益目标响度档位。
+  ///
+  /// 只更新轻量字段并异步下发 setAgcTarget（不重建效果器 / Visualizer），
+  /// 先 notifyListeners 让菜单立即刷新，避免原生 binder 调用阻塞 UI 造成假死。
   Future<void> setAutoLoudnessLevel(AutoLoudnessLevel level) async {
     if (autoLoudnessLevel == level) return;
     autoLoudnessLevel = level;
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_autoLoudnessLevelSettingKey, level.name);
-    await _applyVolumeNormalization();
+    // 立即刷新 UI，不等原生调用（原生方法很轻，但主线程 binder 仍可能偶发排队）。
     notifyListeners();
+    // 持久化与下发都异步进行，失败不影响 UI 响应。
+    unawaited(() async {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_autoLoudnessLevelSettingKey, level.name);
+      if (volumeNormalizationEnabled && volumeGainMode == VolumeGainMode.auto) {
+        await _audioEffects.setAgcTarget(level.targetRmsDb);
+        await refreshAgcStatus();
+      }
+      notifyListeners();
+    }());
   }
 
   /// 申请 RECORD_AUDIO。已授权直接返回 true；永久拒绝时引导去设置页。
@@ -1579,13 +1599,15 @@ class PlayerController extends ChangeNotifier {
     return false;
   }
 
-  /// 拉取一次 AGC 快照（设置页轮询调用）。
+  /// 拉取一次 AGC 快照（设置页点击「实时增益」或模式切换后调用）。
   Future<void> refreshAgcStatus() async {
     if (!isAudioEffectsSupported || !volumeNormalizationEnabled) {
       agcStatus = null;
+      notifyListeners();
       return;
     }
     agcStatus = await _audioEffects.getAgcStatus();
+    notifyListeners();
   }
 
   /// 车载蓝牙歌词功能是否受支持（仅 Android）。

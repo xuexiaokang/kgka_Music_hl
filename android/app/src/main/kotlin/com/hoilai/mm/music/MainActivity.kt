@@ -281,6 +281,15 @@ class MainActivity : AudioServiceActivity() {
                             result.error("agc_status_failed", error.message, null)
                         }
                     }
+                    // 只改 AGC 目标响度：不重建效果器、不碰 Visualizer，避免主线程
+                    // binder 同步调用阻塞导致设置菜单假死。AGC 会在下一采样周期自然收敛。
+                    "setAgcTarget" -> {
+                        val targetRmsDb =
+                            (call.argument<Double>("targetRmsDb")
+                                ?: DEFAULT_TARGET_RMS_DB.toDouble()).toFloat()
+                        val applied = setAgcTarget(targetRmsDb)
+                        result.success(applied)
+                    }
                     else -> result.notImplemented()
                 }
             }
@@ -1054,7 +1063,22 @@ class MainActivity : AudioServiceActivity() {
     // 因此形成闭环：调 postGain → 输出电平变化 → Visualizer 测得变化。慢速收敛避免磨平
     // 同一首歌内的动态（呼吸效应），死区 + 锁定避免增益在临界点来回抖动。
 
+    /// 轻量更新目标响度：只改字段并重置锁定状态，不重建效果器 / Visualizer。
+    /// 供设置页切换响度档位调用，避免重建音频效果器带来的主线程 binder 阻塞。
+    private fun setAgcTarget(targetRmsDb: Float): Boolean {
+        val clamped = targetRmsDb.coerceIn(AGC_MIN_GAIN_DB, AGC_MAX_GAIN_DB)
+        agcTargetRmsDb = clamped
+        // 目标变了，重新收敛：解锁并清掉稳定计数。
+        agcLocked = false
+        agcStableCycles = 0
+        Log.d(TAG_VOLUME_NORMALIZATION, "setAgcTarget: target=${clamped}dB gain=$agcCurrentGainDb")
+        return true
+    }
+
     private fun startLoudnessAgc(audioSessionId: Int) {
+        // 幂等：同一 session 且 AGC 已在跑时不重建（重建 Visualizer 是 binder 同步调用，
+        // 切歌外的高频 configure 会因此卡住主线程）。
+        if (agcEnabled && loudnessVisualizer != null) return
         stopLoudnessAgc()
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
             != PackageManager.PERMISSION_GRANTED

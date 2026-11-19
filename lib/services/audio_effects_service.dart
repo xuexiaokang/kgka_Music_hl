@@ -169,6 +169,25 @@ class AudioEffectsService {
     }
   }
 
+  /// 只更新 AGC 目标响度，不重建效果器 / Visualizer。
+  /// 设置页切换响度档位走这里，避免重建音频效果器阻塞主线程造成菜单假死。
+  Future<bool> setAgcTarget(double targetRmsDb) async {
+    if (!isAudioEffectsSupported) {
+      return false;
+    }
+    try {
+      final result = await _channel.invokeMethod<bool>('setAgcTarget', {
+        'targetRmsDb': targetRmsDb,
+      });
+      return result ?? false;
+    } on PlatformException catch (error) {
+      debugPrint('[KA Music][audio-effects] setAgcTarget failed: $error');
+      return false;
+    } on MissingPluginException {
+      return false;
+    }
+  }
+
   /// 查询 AGC 实时状态（是否激活、当前增益、测得响度、是否锁定）。
   /// 仅 Android 且音量均衡开启时有效；不支持时返回 null。
   Future<AgcStatus?> getAgcStatus() async {

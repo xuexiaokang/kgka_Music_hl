@@ -601,8 +601,10 @@ class SettingsPage extends StatelessWidget {
                               : '当前 ${_gainLabel(player.agcStatus!.gainDb)}'
                                   ' · 测得 ${player.agcStatus!.measuredRmsDb.toStringAsFixed(1)} dBFS'
                                   '${player.agcStatus!.locked ? ' · 已稳定' : ' · 调节中'}',
-                          onTap: () async {
-                            await player.refreshAgcStatus();
+                          // 不 await：刷新走 MethodChannel，避免点击后等待原生回复。
+                          // 结果由 refreshAgcStatus 内部 notifyListeners 驱动重建。
+                          onTap: () {
+                            player.refreshAgcStatus();
                           },
                         ),
                       ] else ...[
