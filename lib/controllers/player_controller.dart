@@ -562,6 +562,11 @@ class PlayerController extends ChangeNotifier {
 
   /// 实时 AGC 的最新快照，供设置页展示；auto 模式且原生支持时非空。
   AgcStatus? agcStatus;
+
+  /// 麦克风权限缓存：进程内已授予就不再重复 platform channel 往返，
+  /// 避免每次切到 auto 都 await 权限查询造成菜单卡顿。被拒存 false，下次仍会重试申请。
+  bool _micPermissionGranted = false;
+
   bool bluetoothLyricsEnabled = false;
   // 普通蓝牙车机只读取 AVRCP 标题，不会读取手机上的歌词广播或 extras。
   bool bluetoothLyricsTitleSyncEnabled = true;
@@ -1548,7 +1553,11 @@ class PlayerController extends ChangeNotifier {
     if (volumeGainMode == mode && (mode == VolumeGainMode.fixed || agcStatus?.active == true)) {
       return true;
     }
-    if (mode == VolumeGainMode.auto && isAudioEffectsSupported) {
+    // 权限已授予时用缓存快速路径，零 platform channel 往返；
+    // 仅首次切 auto 才真正 await 权限弹窗（ unavoidable 的用户交互）。
+    if (mode == VolumeGainMode.auto &&
+        isAudioEffectsSupported &&
+        !_micPermissionGranted) {
       final granted = await _ensureRecordAudioPermission();
       if (!granted) {
         // 录音权限被拒：保持 fixed 模式，避免 auto 静默失效。
@@ -1557,12 +1566,39 @@ class PlayerController extends ChangeNotifier {
         return false;
       }
     }
+
+    // 立即更新 UI + 下发轻量通道，不等效果器 / Visualizer 重建。
     volumeGainMode = mode;
+    // 同步更新 AGC 快照，避免 UI 显示旧状态；真实值由后续 refresh 校正。
+    if (mode == VolumeGainMode.auto) {
+      agcStatus = agcStatus?.copyWith(active: true) ??
+          AgcStatus(
+            active: true,
+            gainDb: volumeGainDb,
+            measuredRmsDb: 0.0,
+            targetRmsDb: autoLoudnessLevel.targetRmsDb,
+            locked: false,
+          );
+    } else {
+      agcStatus = null;
+    }
     notifyListeners();
+
     unawaited(() async {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString(_volumeGainModeSettingKey, mode.name);
-      await _applyVolumeNormalization();
+      if (isAudioEffectsSupported) {
+        if (volumeNormalizationEnabled) {
+          // 轻量切换：原生只翻 agcActive 开关，不重建效果器 / Visualizer。
+          await _audioEffects.setAgcActive(
+            active: mode == VolumeGainMode.auto,
+            gainDb: volumeGainDb,
+          );
+          if (mode == VolumeGainMode.auto) {
+            await refreshAgcStatus();
+          }
+        }
+      }
       notifyListeners();
     }());
     return true;
@@ -1592,11 +1628,15 @@ class PlayerController extends ChangeNotifier {
   /// 申请 RECORD_AUDIO。已授权直接返回 true；永久拒绝时引导去设置页。
   Future<bool> _ensureRecordAudioPermission() async {
     if (!Platform.isAndroid) return false;
+    if (_micPermissionGranted) return true;
     final status = await Permission.microphone.status;
-    if (status.isGranted) return true;
+    if (status.isGranted) {
+      _micPermissionGranted = true;
+      return true;
+    }
     final result = await Permission.microphone.request();
-    if (result.isGranted) return true;
-    return false;
+    _micPermissionGranted = result.isGranted;
+    return _micPermissionGranted;
   }
 
   /// 拉取一次 AGC 快照（设置页点击「实时增益」或模式切换后调用）。

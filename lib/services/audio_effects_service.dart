@@ -188,6 +188,29 @@ class AudioEffectsService {
     }
   }
 
+  /// 轻量切换 auto/fixed 策略：原生只翻 agcActive 开关，不重建效果器 / Visualizer。
+  /// 用于设置页切换「音量均衡策略」，避免 binder 同步重建造成卡顿。
+  Future<bool> setAgcActive({
+    required bool active,
+    double gainDb = 3.0,
+  }) async {
+    if (!isAudioEffectsSupported) {
+      return false;
+    }
+    try {
+      final result = await _channel.invokeMethod<bool>('setAgcActive', {
+        'active': active,
+        'gainDb': gainDb,
+      });
+      return result ?? false;
+    } on PlatformException catch (error) {
+      debugPrint('[KA Music][audio-effects] setAgcActive failed: $error');
+      return false;
+    } on MissingPluginException {
+      return false;
+    }
+  }
+
   /// 查询 AGC 实时状态（是否激活、当前增益、测得响度、是否锁定）。
   /// 仅 Android 且音量均衡开启时有效；不支持时返回 null。
   Future<AgcStatus?> getAgcStatus() async {
@@ -224,6 +247,23 @@ class AgcStatus {
   final double measuredRmsDb;
   final double targetRmsDb;
   final bool locked;
+
+  /// 模式切换时同步更新快照用（如立即把 active 置 true），避免 UI 显示旧状态。
+  AgcStatus copyWith({
+    bool? active,
+    double? gainDb,
+    double? measuredRmsDb,
+    double? targetRmsDb,
+    bool? locked,
+  }) {
+    return AgcStatus(
+      active: active ?? this.active,
+      gainDb: gainDb ?? this.gainDb,
+      measuredRmsDb: measuredRmsDb ?? this.measuredRmsDb,
+      targetRmsDb: targetRmsDb ?? this.targetRmsDb,
+      locked: locked ?? this.locked,
+    );
+  }
 
   factory AgcStatus.fromMap(Map<Object?, Object?> map) {
     return AgcStatus(

@@ -54,7 +54,11 @@ class MainActivity : AudioServiceActivity() {
     // 关键纪律：不改 preGain、不动 limiter；增益只在 [-8, +18] dB 内缓慢收敛，
     // 死区 + 锁定避免把同一首歌内的强弱段落磨平（呼吸效应）。
     private var loudnessVisualizer: Visualizer? = null
+    // agcEnabled = Visualizer 是否在跑（音效开启期间常驻）；
+    // agcActive = 当前是否把 AGC 结果写进 postGain（auto=true / fixed=false）。
+    // 模式切换只翻 agcActive，不碰 Visualizer，避免 binder 重建造成卡顿。
     private var agcEnabled = false
+    private var agcActive = false
     private var agcCurrentGainDb = DEFAULT_VOLUME_GAIN_DB
     private var agcTargetRmsDb = DEFAULT_TARGET_RMS_DB
     private var agcLocked = false
@@ -269,7 +273,7 @@ class MainActivity : AudioServiceActivity() {
                     "getAgcStatus" -> {
                         runCatching {
                             mapOf<String, Any>(
-                                "active" to agcEnabled,
+                                "active" to agcActive,
                                 "gainDb" to agcCurrentGainDb.toDouble(),
                                 "measuredRmsDb" to lastMeasuredRmsDb.toDouble(),
                                 "targetRmsDb" to agcTargetRmsDb.toDouble(),
@@ -288,6 +292,17 @@ class MainActivity : AudioServiceActivity() {
                             (call.argument<Double>("targetRmsDb")
                                 ?: DEFAULT_TARGET_RMS_DB.toDouble()).toFloat()
                         val applied = setAgcTarget(targetRmsDb)
+                        result.success(applied)
+                    }
+                    // 切换 auto/fixed 策略：只翻 agcActive 开关 + 需要时写一次 postGain，
+                    // 不 stop/release/new Visualizer（全是主线程 binder 同步调用，会卡顿）。
+                    // Visualizer 在音效开启期间常驻，fixed 模式下回调早退不做调整。
+                    "setAgcActive" -> {
+                        val active = call.argument<Boolean>("active") ?: false
+                        val gainDb =
+                            (call.argument<Double>("gainDb")
+                                ?: DEFAULT_VOLUME_GAIN_DB.toDouble()).toFloat()
+                        val applied = setAgcActive(active, gainDb)
                         result.success(applied)
                     }
                     else -> result.notImplemented()
@@ -988,11 +1003,17 @@ class MainActivity : AudioServiceActivity() {
             applyMbcAndLimiter(effect, initialGain)
             effect.enabled = true
 
+            // 模式只由 agcActive 决定，不再 stop/new Visualizer。
+            // 两种模式共用常驻 Visualizer：fixed 时 onAgcWaveform 早退不调整，
+            // auto 时正常收敛。这样 auto↔fixed 切换零 binder 重建、不卡顿。
+            agcActive = autoGain
             if (autoGain) {
-                startLoudnessAgc(audioSessionId)
-            } else {
-                stopLoudnessAgc()
+                agcLocked = false
+                agcStableCycles = 0
             }
+            // 只要音效开启且有权限，就保持 Visualizer 常驻（幂等，已启动直接返回）。
+            // fixed 模式也启动，是为了切到 auto 时零延迟——代价仅是一次轻量采样回调。
+            startLoudnessAgc(audioSessionId)
             return true
         } catch (e: Exception) {
             stopLoudnessAgc()
@@ -1075,6 +1096,29 @@ class MainActivity : AudioServiceActivity() {
         return true
     }
 
+    /// 轻量切换 auto/fixed 策略：只翻开关，不碰 Visualizer / 效果器创建。
+    /// Visualizer 在音效开启期间常驻，两种模式共用，避免切换时的主线程 binder 重建卡顿。
+    private fun setAgcActive(active: Boolean, gainDb: Float): Boolean {
+        agcActive = active
+        agcLocked = false
+        agcStableCycles = 0
+        if (active) {
+            // 切到 auto：从当前增益开始收敛（不跳变），确保 Visualizer 在跑。
+            // 通常已常驻；仅当权限刚授予等边缘情况才需幂等启动。
+            dynamicsProcessingSessionId?.let { startLoudnessAgc(it) }
+            Log.d(
+                TAG_VOLUME_NORMALIZATION,
+                "setAgcActive: AUTO gain=$agcCurrentGainDb visualizer=$agcEnabled"
+            )
+        } else {
+            // 切到 fixed：把 postGain 恢复到用户设定的固定档位，AGC 停止写增益。
+            dynamicsProcessing?.let { applyMbcAndLimiter(it, gainDb) }
+            agcCurrentGainDb = gainDb
+            Log.d(TAG_VOLUME_NORMALIZATION, "setAgcActive: FIXED gain=$gainDb")
+        }
+        return true
+    }
+
     private fun startLoudnessAgc(audioSessionId: Int) {
         // 幂等：同一 session 且 AGC 已在跑时不重建（重建 Visualizer 是 binder 同步调用，
         // 切歌外的高频 configure 会因此卡住主线程）。
@@ -1126,7 +1170,8 @@ class MainActivity : AudioServiceActivity() {
     }
 
     private fun onAgcWaveform(waveform: ByteArray) {
-        if (!agcEnabled) return
+        // fixed 模式下 Visualizer 常驻但不做任何调整，只做一次布尔判断立即返回。
+        if (!agcEnabled || !agcActive) return
         val now = android.os.SystemClock.elapsedRealtime()
         if (now - agcLastSampleAtMs < AGC_SAMPLE_INTERVAL_MS) return
         agcLastSampleAtMs = now
