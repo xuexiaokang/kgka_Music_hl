@@ -27,7 +27,7 @@
 ```
 HEAD   = 6469f47 feat: 音量均衡新增实时响度自动增益（AGC）
 origin = 已同步（0 未 push）
-upstream/master = 落后 0、领先 29（全部已 push，不可再 squash——§7.3）
+upstream/master = 落后 0、领先 30（全部已 push，不可再 squash——§7.3）
 pubspec = version: 2026.11.20+20268   （准发版，tag 未打）
 工作区 = 干净；当前 APK md5 dc988d7a…（26,495,813 B，versionCode 20268，正式签名，含实时 AGC）
 ```
