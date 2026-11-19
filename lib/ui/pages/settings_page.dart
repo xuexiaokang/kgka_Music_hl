@@ -59,7 +59,7 @@ class SettingsPage extends StatelessWidget {
 
   String _gainLabel(double gain) => signedGainLabel(gain);
 
-  /// 选择增益策略：自动（按每首歌响度自适应）/ 固定档位。
+  /// 选择增益策略：自动（只补偏轻的歌、不减增益）/ 固定档位。
   Future<void> _selectVolumeGainMode(
     BuildContext context,
     PlayerController player,
@@ -128,7 +128,7 @@ class SettingsPage extends StatelessWidget {
     }
   }
 
-  /// 选择自动增益的目标响度。
+  /// 选择自动增益的目标响度（只补不减下的补增益上限，非归一化目标）。
   Future<void> _selectAutoLoudness(
     BuildContext context,
     PlayerController player,
@@ -153,8 +153,9 @@ class SettingsPage extends StatelessWidget {
                 ),
                 const SizedBox(height: 8),
                 Text(
-                  'AGC 会把每首歌调整到接近该响度。标准档最接近主流流媒体；'
-                  '响亮档更响但可能触及限幅。',
+                  '只把偏轻的歌补到接近该响度；已达到或超过该响度的歌保持原样（不减增益）。'
+                  '档位数值越大，越多歌会被判定为偏轻、补得越多：轻柔（-20）下多数歌曲'
+                  '已达标，通常不动作；响亮（-12）补得最多，但可能触及限幅。',
                   style: Theme.of(sheetContext).textTheme.bodyMedium,
                 ),
                 const SizedBox(height: 8),
@@ -584,7 +585,7 @@ class SettingsPage extends StatelessWidget {
                         iconColor: colorScheme.primary,
                         title: '音量增益策略',
                         subtitle: player.volumeGainMode == VolumeGainMode.auto
-                            ? '自动适配 · 按每首歌响度动态调整'
+                            ? '自动适配 · 只把偏轻的歌补上来'
                             : '固定增益 · ${_gainLabel(player.volumeGainDb)}',
                         onTap: () => _selectVolumeGainMode(context, player),
                       ),
@@ -596,7 +597,7 @@ class SettingsPage extends StatelessWidget {
                           title: '目标响度',
                           subtitle:
                               '${player.autoLoudnessLevel.label} · ${player.autoLoudnessLevel.targetRmsDb.toStringAsFixed(0)} dBFS'
-                              '（数值越大越响）',
+                              '（补增益上限，越大补得越多）',
                           onTap: () => _selectAutoLoudness(context, player),
                         ),
                         _AgcLiveTile(player: player, iconColor: colorScheme.primary),
