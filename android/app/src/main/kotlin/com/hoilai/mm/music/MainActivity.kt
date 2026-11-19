@@ -1065,11 +1065,16 @@ class MainActivity : AudioServiceActivity() {
         }
         releaseDynamicsProcessing()
         val config = DynamicsProcessing.Config.Builder(
-            // 时域实现（官方 VARIANT_FAVOR_TIME_RESOLUTION=1）：原用的频域变体(0)
-            // 会走 FFT / 分频滤波器组，即使单 band 且 EQ 全关，仍引入额外加窗与
-            // 频率截断，是最后一个可能劣化高频的参数。现在 MBC 只是纯增益级、
-            // 无 EQ，改用直接对波形处理的时域变体：无分频、无高频滚降、延迟更低。
-            DynamicsProcessing.VARIANT_FAVOR_TIME_RESOLUTION,
+            // 必须用频域变体(0)。曾误改为时域变体 VARIANT_FAVOR_TIME_RESOLUTION(1)，
+            // 但设备 native 层普遍未实现该引擎架构，实测 MuMu 直接报
+            // 「variant 1 not available for creation」+「DP_PARAM_ENGINE_ARCHITECTURE
+            // error setting variant 1」，整个 DynamicsProcessing 对象为 null：
+            // postGain 完全写不进去，固定增益与自动 AGC 双双静默失效。
+            // 更隐蔽的是 native 创建失败时 Java 构造函数不抛异常，configure 仍返回
+            // true，UI 与日志都看不出异常，只能靠听感发现——所以这个参数禁止再改。
+            // 高频丢失的根因是此前的 2:1 全频压缩器（已由下方 MBC 透明增益级移除），
+            // 与变体无关；单 band + 全 EQ 关闭时频域变体不会带来可闻的高频损失。
+            DynamicsProcessing.VARIANT_FAVOR_FREQUENCY_RESOLUTION,
             // 框架会用 effect 引擎的实际通道数重建配置（AOSP：new Config(mChannelCount, cfg)
             // 且「replicate channels if more」），故这里写 2 不会导致声道被静音或丢失。
             2, // channels
