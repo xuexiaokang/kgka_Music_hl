@@ -573,7 +573,7 @@ class SettingsPage extends StatelessWidget {
                       icon: Icons.volume_up_rounded,
                       iconColor: colorScheme.primary,
                       title: '音量均衡',
-                      subtitle: '降低各首歌曲音量差异，自动控制音量',
+                      subtitle: '降低各首歌曲音量差异，开场快速测定后锁定增益',
                       value: player.volumeNormalizationEnabled,
                       onChanged: (value) async {
                         final ok =
@@ -591,7 +591,7 @@ class SettingsPage extends StatelessWidget {
                         iconColor: colorScheme.primary,
                         title: '音量增益策略',
                         subtitle: player.volumeGainMode == VolumeGainMode.auto
-                            ? '自动适配 · 只把偏轻的歌补上来'
+                            ? '自动适配 · 只补偏轻的歌，开场几秒给足后整曲不变'
                             : '固定增益 · ${_gainLabel(player.volumeGainDb)}',
                         onTap: () => _selectVolumeGainMode(context, player),
                       ),
@@ -1639,9 +1639,13 @@ class _AgcLiveTileState extends State<_AgcLiveTile> {
     if (status == null) return '正在测量当前歌曲响度…';
     if (!status.active) return '自动增益未激活 · 请确认录音权限';
     final gain = signedGainLabel(status.gainDb, fractionDigits: 1);
+    // 开场约 4.8 秒按 P80 代表性响度快速给足增益后整曲冻结；「瞬时」是短窗电平，
+    // 会随人声/间奏起伏，但绝不驱动增益变化，故明确区分两者。
+    // 锁定依据是「开场」这十几帧样本，不是整曲扫描，故用「已锁定本曲增益」
+    // 而非「已按整曲响度锁定」，避免让用户误以为测完了整首歌。
     return '当前 $gain'
-        ' · 测得 ${status.measuredRmsDb.toStringAsFixed(1)} dBFS'
-        '${status.locked ? ' · 已稳定' : ' · 调节中'}';
+        ' · 瞬时 ${status.measuredRmsDb.toStringAsFixed(1)} dBFS'
+        '${status.locked ? ' · 已锁定本曲增益' : ' · 开场快速测定中'}';
   }
 
   @override

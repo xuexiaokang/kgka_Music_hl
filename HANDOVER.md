@@ -22,19 +22,129 @@
 
 ---
 
-## 2. 当前状态快照（2026-11-20，v2026.11.20.1 已发版）
+## 2. 当前状态快照（2026-11-20，v2026.11.20.2 发布中）
 
 ```
-HEAD   = 2cb77ce fix(audio): 打开音量均衡开关时主动申请录音权限（v2026.11.20.1）
-origin = 已同步（0 未 push）；tag v2026.11.20.1（annotated, b91378825→2cb77ce）
-Release = v2026.11.20.1（id 452112971，正文 900 字符，资产 app-release.apk 26,499,833 B，latest）
-         上一个 Release v2026.11.20（id 451755386）保持不变
+HEAD   = 本次发版提交（四轮 AGC 修复 + 复审收口 + 版本号 20281）
+origin = 已同步；tag v2026.11.20.2 / Release 创建中（发布完成后补 id 与 tag object SHA）
+Release = v2026.11.20.2（versionCode 20281，资产 app-release.apk 26,500,897 B，md5 c4d60dbf…，latest）
+         上两版 v2026.11.20（id 451755386）/ v2026.11.20.1（id 452112971）保持不变
 upstream/master = 落后 0（本 fork 领先；push 仍为 no_push，不可 squash——§7.3）
-pubspec = version: 2026.11.20+20280
-工作区 = 干净；APK md5 9a19172c04c3df7dbfe6b3543bb51713（25.3MB，versionCode 20280，正式签名 SHA-256 76a87e47…）
+pubspec = version: 2026.11.20+20281
+工作区 = 干净；续一~续四共四轮 AGC 修复与复审收口全部随本版发版，见下文五节
+当前 APK md5 c4d60dbf5b550a7f68d487b7c210cd8e（26,500,897 B，15:20 重建，versionCode 20281，正式签名 SHA-256 76a87e47…）
 ```
 
-> 上一版 `v2026.11.20` 为 v2026.10.31 之后的累计发版（18 个提交、66 文件 +8633 行）。音量均衡链路历经 AGC 开环前馈重构、MBC 透明增益级、时域变体回退等多轮修复，最终语义为**只补不减**（增益 `[0,+18]dB`），目标响度是补增益上限而非双向归一化目标。本次 `v2026.11.20.1` 为同日单项修订（权限申请时机），详见下文修复记录。MuMu 实证覆盖安装与效果链，真车机逐曲听感仍未实测。
+> 上一版 `v2026.11.20` 为 v2026.10.31 之后的累计发版（18 个提交、66 文件 +8633 行）。音量均衡链路历经 AGC 开环前馈重构、MBC 透明增益级、时域变体回退等多轮修复，最终语义为**只补不减**（增益 `[0,+18]dB`），目标响度是补增益上限而非双向归一化目标。本次 `v2026.11.20.2` 为同日修订版二（versionCode 20281），把续一~续四共四轮 AGC 修复与复审收口一并发布，详见下文续五节。MuMu 实证覆盖安装与效果链，真车机逐曲听感仍未实测。
+
+**2026-11-20 续五：发版 v2026.11.20.2（同日修订版二，versionCode 20281）**
+
+- 触发：用户「发版」。续一~续四共四轮 AGC 修复与复审一次性收口全部随本版发布；按 §7.3 不改写已发布历史，因 `v2026.11.20`、`v2026.11.20.1` 的 tag/Release 均已占用，新建 `v2026.11.20.2`，上两版保持不动。
+- 版本：`pubspec.yaml` `version: 2026.11.20+20281`、`lib/config/app_config.dart` `appVersionCode='20281'`；`versionName` 仍为 `2026.11.20`（应用内检查更新为纯数值比较，只递增 versionCode）。
+- 产物：`build/app/outputs/flutter-apk/app-release.apk`，**26,500,897 B / md5 `c4d60dbf5b550a7f68d487b7c210cd8e`**（15:20:28 构建，晚于版本号改动）；`aapt dump badging` 实证 `versionCode=20281 / versionName=2026.11.20`；`apksigner verify --print-certs` 实证 `CN=KA Music Release` / SHA-256 `76a87e47…`，与线上同证书、可直接覆盖安装。
+- 构建：`flutter build apk --release --no-pub` 成功（Gradle assembleRelease 87.0s，Kotlin 编译通过；仅 Gradle 8.14 / AGP 8.11.1 / Kotlin 2.2.20 即将不再受 Flutter 支持的既有 warning）；`pubspec.lock` 未被改写。
+- 发版素材：`build/commit_msg.txt`（提交说明）与 `build/release_body.md`（Release 正文，markdown：四轮修复表格 + 复审三处缺陷 + 红线 + 验证 + 版本说明，如实标注「真车机逐曲听感仍未实测」）；两者在 `/build/` 忽略目录，不入库。
+- 流程（§6）：先 push master → Git Data API 两步建 annotated tag `v2026.11.20.2`（tag object + ref）→ Release API 建 Release 并带 markdown 正文 → `uploads.github.com` 上传 `app-release.apk` → 核对 latest 与资产 md5。tag 锚在功能提交，文档收尾另起一个提交（与 `v2026.11.20.1` 同）。
+- 历史节标题中的「未发版，工作区未提交」是当时状态的如实记录，不逐一改写；统一以本节为准。
+- 状态：**发布中**；tag object SHA / Release id / 资产校验结果待发布完成后补记。
+
+**2026-11-20 续四：复审发现的真实缺陷与文档失真一次修正（未发版，工作区未提交）**
+
+- 触发：用户「问题全部一起修正」，把 13:55 复审列出的 P1/P2/P3 全部落地，不打补丁、统一收口。
+- **逻辑修复（`MainActivity.kt`）**：
+  - **P1-1 fixed→auto 起点未归零**：`setAgcActive(true)` 只翻 `agcActive` + `resetAgcTrackEstimate()`，不经过 configure，导致从固定档位（默认 +3、最高 +18）切到 auto 时沿用旧 postGain；偏响歌 desired≈0 需 0.6dB/步慢降十几秒仍被放大并触发 limiter。现 active 分支同步写 `applyMbcAndLimiter(..., 0f)` + `agcCurrentGainDb=0f`，与 configure「auto 起点固定 0dB」纪律一致；仍零 binder 重建（只写参数），不卡顿。
+  - **P1-2 音频会话重建重置锁定增益**：`androidAudioSessionIdStream` 每次变化都走 `_applyVolumeNormalization()` → configure()，原无条件归零 + 清估计，车机蓝牙/USB 切换会把已冻结的 +15dB 瞬间归零再花 3~5 秒升回。现 configure 在 `ensureDynamicsProcessing` 之前判定 `sessionChanged && autoGain && agcLocked`，保存 `preservedGain/preservedDecisionDb`，末尾（因 `releaseDynamicsProcessing`/`startLoudnessAgc` 都会 reset 估计）统一恢复 `agcLocked=true` / desired=current=preservedGain 并显式写回 postGain，新增日志 `AGC preserved across session change`。切歌路径天然安全：`resetAgcForTrackChange` 在 `play()` 前同步 await 清锁归零，即便 session 回调抢先，随后归位与 configure 仍把新歌重置到 0dB。
+  - **P2 改档响应慢**：`setAgcTarget` 锁定时重算 desired，但下降恒 0.6dB/步，+15→0 需约 10 秒而 UI 已显示「已锁定」。新增 `agcTargetAdjusting`：用户改档后临时把下降步长放开到 2dB/步，追平即清；`resetAgcTrackEstimate()` 统一复位。
+  - **P3 clamp 统一**：`agcCurrentGainDb` 的 clamp 由 `[0,18]` 改为 `[0,+15]`（与 `agcDesiredGainDb` 一致）；`AGC_MAX_GAIN_DB=18` 仅保留给 fixed 档位与 `resetAgcForTrackChange` 归位 clamp。
+  - **窗口常量与实现对齐**：删除 `AGC_WINDOW_SAMPLES=75`（从未填满，12 个样本即锁定），窗口数组、`%` 取模、`currentLoudnessPercentile()` 一律改用 `AGC_DECIDE_CYCLES=12`。行为不变，消除「最近 30 秒 / 75 样本」的失真。
+- **注释订正（`MainActivity.kt`，不动逻辑）**：顶部大注释明确「12 个样本即锁定、无 30 秒滚动窗口」「极轻歌 desired 直接打满 +15，稳定性来自上限保护而非 P80 与增益自然相交」；`agcDecisionDb` 注释去掉已删除的「单向下调」；`resetAgcTrackEstimate()` 调用点去掉「目标档位变更」（实际不调）；configure 的 `[0,+18]` 改 fixed/auto 两档；归位「约 3 秒」改 4.8 秒；分位数注释「75 个 float」改「最多 12 个」；「整曲代表性响度」改「本曲开场代表性响度」。
+- **UI 文案（`settings_page.dart`）**：锁定状态由「已按整曲响度锁定」改「已锁定本曲增益」——依据仅开场 4.8 秒 P80，不是整曲扫描；副标题「开场快速测定后锁定增益」「开场几秒给足后整曲不变」保持不变。
+- **文档订正**：本文件续三节「保留 30 秒窗口 P80」「自然相交」「已按整曲响度锁定」三处、`update.md` 第 2 条「最近 30 秒有效样本的 P80 分位」均按最终实现改写；续二/续一历史节中「75 样本 / 30 秒」是当时实现的如实记录，不改写历史，仅在本节统一说明。
+- **红线复核**：只补不减 `[0,+15]`（auto）、开环前馈无积分律、MBC 透明增益级 + Nyquist cutoff、variant 0、limiter 只兜峰、PEAK_RMS/scalingMode=1、权限前置与降级、切歌 `await` 归位、锁定后零估计零调整，全部保持。
+- **验证（14:40~15:05，MuMu 车机实例 index 1 / Android 15）**：
+  - `flutter analyze --no-pub` 14 项均为项目既有 info/warning，无新增；`pubspec.lock` 未改。`flutter build apk --release --no-pub` 成功（Gradle assembleRelease 178.7s，Kotlin 编译通过；仅 Gradle/AGP/Kotlin 版本即将不再受 Flutter 支持的既有 warning）。
+  - 覆盖安装：MuMu adb 直连（`127.0.0.1:16416` / `192.168.7.188:5555`）均失败、`uiautomator` 因缺 `libnativeloader.so` 不可用，改用 `MuMuManager control -v 1 app close -pkg ...` + `control -v 1 -ver 15 app install -apk ...`，返回 `{"package":"com.hoilai.mm.music"}`，**安装成功，无 -502/7001**。
+  - 冷启动实证（`sh -v 1 -c 'logcat -d -v time -s VolumeNormalization:V'`；流式 `-f` 后台在本机不落盘，改用短窗口 dump 避开 Vulkan/MESA 刷屏）：`configure: enabled=true autoGain=true gainDb=0.0 targetRmsDb=-16.0 session=57` → `AGC started: mode=PEAK_RMS` → 2/4/6/8/10/12/14/15dB 每 400ms 一步（3.2s 给足）→ `AGC track locked: desired=15.0 p80=-36.096 samples=12`（4.8s）。**desired 全程恒为 +15（上限保护），实测再次印证续四订正后的注释**。
+  - 自动切到下一首（15:04:38）：`resetAgcForTrackChange: baseGain=0.0 agcActive=true` → `configure: ... session=57`（session 未变）→ 从 0 重新快测 → 4.8 秒重新 `track locked: desired=15.0 p80=-40.96 samples=12`。**session 未变故 `AGC preserved across session change` 未误触发（日志 0 次）**，切歌归位与「不误保留上一首增益」成立；锁定后日志尾部无 `AGC pulse`（整曲冻结保持）。
+  - **验证边界（如实标注）**：`uiautomator` 不可用、adb 直连失败，无法自动操作设置页 UI，故「运行中 fixed→auto 归零」「运行中改档快速对齐」未能在 MuMu 复现；蓝牙/USB 音频切换导致的 session 重建也未能模拟。P1-1 / P1-2 / P2 的正向日志（如 `setAgcActive: AUTO gain=0.0`、`AGC preserved across session change`）**尚未取得实跑证据**，仅由 Kotlin 编译、代码路径审查与主路径实跑（含切歌不误触发）保证。真车机可手动复验：① 策略从固定（+12dB）切回自动，看增益是否立刻回 0 再 3~5 秒给足，而非从 +12 慢降；② 锁定后把目标响度由响亮改轻柔，看是否 1~2 秒内快速降回 0（而非十几秒）；③ 播放中切蓝牙/USB 音频，听是否还有 +15→0 的音量骤降。
+- 产物：`build/app/outputs/flutter-apk/app-release.apk`，**26,500,905 B / md5 `44ca4ef84fb3b7ccc1178d2590c2d62a`**（14:59:27 构建，晚于本轮源码改动）；`versionCode=20280` / `versionName=2026.11.20`（**版本号未递增**），正式签名 `CN=KA Music Release` / SHA-256 `76a87e47…`（`aapt dump badging` + `apksigner verify --print-certs` 实证，与线上一致，可覆盖安装）。
+- 状态：**未提交、未 push、未打 tag、未发 Release**；发版需先递增到 `+20281` 并重建（`v2026.11.20`、`v2026.11.20.1` 已占用，按 §7.3 应新建 `v2026.11.20.2`）。真车机逐曲听感仍未实测。
+
+**2026-11-20 续三：修复「切歌后偏小声歌曲反而比之前更小声」（未发版，工作区未提交）**
+
+- 触发：用户实测反馈「现在实测《别怕我伤心》反而比前面一般还要小声」。
+- **实测取证**（MuMu index 1 / Android 15，《别怕我伤心》- 张信哲，PAUSED 在 1:43，档位 `loud` -12dBFS / auto）：12:34:48 切歌后 4.8 秒内增益仅 **+1.04dB**，而按 p80=-26.61dBFS 应补 **+14.61dB**（缺口 13.57dB）；中位段落输出 -31.47dBFS，离目标 -12 差 19.47dB；渐入速率 0.2dB/秒 ⇒ 补到 +14.6 需 **68 秒**，全程 `locked=false`。相对「前面一般歌曲」：偏响歌源 -13.88+0 ≈ -13.9dBFS，这首 -26.6+1.04 ≈ -25.6dBFS，实际小约 12dB。`audio_flinger` 确认 session 33 上 Visualizer(75) / Dynamics Processing(67) 均 Enabled ⇒ **不是功能失效，是增益给得太慢太少**。
+- 根因：上一版 `ceiling = 有效样本数 × 0.08dB`（0.2dB/秒）为防开场打满，把增益放开拖到约 90 秒，等于让偏小声歌曲前半首乃至大半首几乎无补偿；日志还显示 `10:30:50→10:32:06` 花 76 秒才锁定、`12:27:54→12:34:43` **6 分 49 秒都没锁定**（增益只爬到 +12），即 ceiling 与 P80 上包络竞速导致锁不定。上一节把「172 帧/约 69 秒单调渐入」当成优点，其实是本次回归元凶；所谓「最终 +9.16dB」是播到 3:38 才达到，用户在 1:43 暂停根本没等到。旧版虽过补+回落，但 17 秒就冲到 +18，听感至少是「响」。
+- 用户选择「快速测定一次给足（推荐）」后实施（`MainActivity.kt`，收口 `onAgcMeasuredRms`，整体替换模型，不打补丁）：
+  - 删除 `AGC_RAMP_DB_PER_SAMPLE` / `agcRampCycles` / `ceiling` / `AGC_REESTIMATE_MARGIN_DB` / 锁定后单向下调整套机制；新增 `agcMeasureCycles`、`AGC_DECIDE_CYCLES=12`（4.8 秒）、`AGC_FAST_RISE_DB=2.0`（上升 5dB/s）、`AGC_AUTO_MAX_GAIN_DB=15.0`。
+  - 开场测量期**边测边写**：P80 上包络只升不降 ⇒ desired 只降不升；增益以 2dB/步快升去追，窗口结束（`samples=12`）即 `agcLocked=true`、冻结 `agcDesiredGainDb`，**锁定后完全不做响度估计、不随段落调整**，仅用户改档 `setAgcTarget` 时重算。上升快（2dB/步）、下降慢（0.6dB/步）。
+    **订正（续四）**：旧描述「P80 上升更快、两者自然相交、不再用轻前奏打满 +18 再回落」与实测 `desired=15.0 p80=-40.022` 不符——极轻歌曲开场 p80 低至 -40dBFS 时 rawDesired 远超上限，desired 直接打满 `AGC_AUTO_MAX_GAIN_DB=15dB`，稳定性来自**上限保护**，不是分位数与增益相交。
+  - **+15 上限的由来**：首次实测（无上限版）发现开场 4.8 秒常只采到轻前奏（p80 低至 -38~-40dBFS），desired 直接打满 +18 并冻结整曲；而该曲人声峰值约 -17.7dBFS，+18 会推到 0dBFS 以上让 limiter 持续限幅（音质劣化，用户明确要求避免）。+15 留约 3dB 峰值余量，且无论开场采到前奏还是人声都稳定收敛到 +14.6~15dB，消除「有时 +14.6 / 有时 +18」的随机。`AGC_MAX_GAIN_DB=18` 仍用于 fixed 档位与归位 clamp。
+  - 保留：**开场 12 个有效样本（4.8 秒）的 P80**、只补不减、开环前馈、MBC 透明增益级、PEAK_RMS、切歌先归位再播放、权限主动申请、`getAgcStatus().locked`。（续四订正：旧写「30 秒窗口 P80」失真——`AGC_DECIDE_CYCLES=12` 即锁定，窗口从未填满 75 个样本；最终实现已把窗口大小直接收敛为 12。）
+- UI（`settings_page.dart`）：总开关副标题「开场快速测定后锁定增益」、auto 策略「开场几秒给足后整曲不变」、tile 状态「已锁定本曲增益 / 开场快速测定中」。（续四订正：旧写「已按整曲响度锁定」，依据仅开场 4.8 秒 P80，非整曲扫描。）
+- **MuMu 实证**（同曲从头播放，档位 `standard` -16dBFS；改用后台流式 logcat 写 `/data/local/tmp/*.log`，避开 Vulkan/MESA 刷屏冲掉日志）：
+  - 切歌后增益 0→**+15.0dB 仅用 4.8 秒**（到 +5dB 2.8s / +10dB 3.6s / +14dB 4.4s），**未打满 +18**；`AGC track locked: desired=15.0 p80=-40.022 samples=12`。
+  - 锁定后连续播放至 2:26 **零次 `AGC pulse`**（整曲冻结）；measured 波动跨度 29.35dB（-54.49~-25.14dBFS，确有人声与纯音乐段落）而增益不变 ⇒ 歌内不突变保持。
+  - 偏响歌（连续切歌段）`AGC track locked: desired=0.274 p80=-16.274` ≈ 0dB，红线保持；`audio_flinger` 确认 Visualizer + Dynamics Processing 仍在链上。
+  - 与本次回归对照：切歌后 5 秒增益 **+1.04 → +15.0dB**；给足耗时 **68 秒 → 约 3~5 秒**；中位段落输出 -31.47 → 约 -19dBFS（改善约 12dB）。
+- **如实标注**：
+  - 档位已从 `loud`(-12) 变为 `standard`(-16)（覆盖安装后 App 重新读取 prefs；上一节曾 sed 改过但未 force-stop，本次生效）。该曲在两档下 rawDesired 均远超 +15、结果相同，不影响结论。
+  - 切歌时 `resetAgcForTrackChange` 与紧随的 `configure` 会各调一次 `resetAgcTrackEstimate()`，导致开场第一帧样本被丢弃、日志里 p80 出现一次回退；但增益轨迹仍单调递增（2→4→…→15）、无突降，听感无影响。属已知边缘，本轮未强行改动。
+  - P80 达标意味着高位人声/副歌已与别的歌对齐，中位/主歌仍偏低是该曲 16dB 动态范围所致，在「只补不减 + 无动态压缩」约束下无法消除（压缩会削波，用户此前明确要求移除）。若真车机听感仍偏小，可把百分位降到 P70 或给目标加 +3dB 偏置，属参数微调，待用户听感反馈，本轮未擅自改。
+- 产物：`build/app/outputs/flutter-apk/app-release.apk`，26,500,625 B，md5 `c659c2f2eb87fe4f5dbe4bdb3d02ad5c`，`versionCode=20280` / `versionName=2026.11.20`（**版本号未递增**），正式签名 `CN=KA Music Release` / SHA-256 `76a87e47…`（`aapt dump badging` + `apksigner verify` 实证）。`flutter analyze` 14 项均为项目既有 info/warning（中途误带一个 `}` 已即时修正并复跑确认）；Kotlin 编译通过；`pubspec.lock` 已还原。
+- 状态：**未提交、未 push、未打 tag、未发 Release**；发版需先递增到 `+20281` 并重建（`v2026.11.20`、`v2026.11.20.1` 已占用，按 §7.3 应新建 `v2026.11.20.2`）。真车机逐曲听感仍未实测。
+
+**2026-11-20 续二：重构 AGC 估计模型，适配偏小声歌曲（未发版，工作区未提交）**
+
+- 触发：用户要求复测「现在的参数是否适合声音小的歌曲，比如当前正在播放的《别怕我伤心》」。MuMu 车机实例（index 1 / Android 15）确认当时正播放《别怕我伤心》- 张信哲，档位 `loud`（-12.0dBFS）、模式 `auto`。
+- **结论：上一版参数不适合**，三个量化硬伤（同曲播两遍稳定复现）：
+  - 开场 `AGC_EVALUATE_CYCLES=8`（3.2s）只采到轻前奏 `-36.52dBFS`，算出的真实需求 +24.52dB 被 `AGC_MAX_GAIN_DB=18` 直接 clamp 打满；17 秒内增益 0→+18。
+  - 人声/副歌渐响把峰值上包络从 -36.52 刷到 -17.72（+18.8dB），触发 7 次 `AGC gain revised down`，desired 18→5.72（**-12.28dB**），**过补状态持续约 3 分 27 秒**才稳定，听感是「前奏越放越响、人声进来后越唱越轻」。
+  - 最终仍**补不够**：整曲 measured 中位数 -34.04dBFS、峰值 -17.72dBFS（动态 16.32dB），按峰值定增益只补 +5.72dB → 中位段落输出 -28.32dBFS，离目标 -12 差 16dB。这正是用户反复反馈「《别怕我伤心》还是非常小声」的根源。
+  - 有效的那一半：歌内 `desired` 上升 0 次，纯音乐段确实不会抬增益（上一轮修复成立）；问题在**代表性响度怎么估**。与档位无关：标准档 -16 开场需求 +20.52 仍被 clamp 到 +18，终值只剩 +1.72dB（按公式推导，未实跑）。
+- 根因：`3.2s` 固定窗口 + **峰值 max** 模型与「渐入式、大动态」歌曲结构性不匹配——窗口太短用最轻前奏定增益（过补），峰值只反映少数最响副歌（少补），两个偏差方向相反，造成「先猛补 → 一路撤 → 还是不够」。
+- 用户选择「整体重构估计模型」后实施（`MainActivity.kt`，收口到 `onAgcMeasuredRms`，不打补丁）：
+  - 代表性响度改为**最近 75 个有效样本（约 30 秒）的 P80 分位**的只升不降上包络 `agcRepresentativeDb`（新增 `currentLoudnessPercentile()`，dB 域线性插值；静音 < -55dBFS 不入窗也不推进计数）。删除 `agcObservedPeakDb` / `agcDecisionPeakDb` / `agcEvaluateCycles` 及 `AGC_EVALUATE_CYCLES` / `track decided` 整套旧机制。
+  - 新增**开场缓升上限** `ceiling = 有效样本数 × 0.08dB`（≈0.2dB/s，约 90 秒放开到 +18dB）：由帧数驱动、与音乐段落无关，增益从 0 单调渐入；`ceiling >= rawDesired` 时 `agcLocked=true`、`agcDecisionDb=agcRepresentativeDb`，此后完全由整曲响度决定。
+  - 锁定后仅当上包络再升超过 `AGC_REESTIMATE_MARGIN_DB=1.5` 才允许**单向下调**（防过补/削波），日志 `AGC gain revised down`；上包络只升不降保证 desired 只降不升。
+  - `resetAgcTrackEstimate()` 扩展为清窗口/上包络/ramp/锁定，覆盖全部 6 个重置点；`setAgcTarget` 在已锁定时用新目标立即重算且不重置 ramp，未锁定时下一帧自然按新目标重算。
+  - 保留：只补不减 `[0,+18]dB`、开环前馈、MBC 透明增益级、PEAK_RMS、切歌先归位再播放、权限主动申请、`getAgcStatus().locked` 语义（改为「已按整曲响度锁定」）。
+- UI（`settings_page.dart`）：总开关副标题改「开场渐入后按整曲响度锁定」，auto 策略副标题改「开场渐入后锁定」，tile 状态改「已按整曲响度锁定 / 开场渐入中」，避免与缓升行为冲突。
+- **MuMu 实证（同曲、同档位 -12dBFS，从头播放 + reset 后完整 3 分 38 秒）**：
+
+  | 指标 | 旧版（峰值 max + 3.2s 窗口） | 新版（P80 + 缓升上限） |
+  |---|---|---|
+  | 开场峰值增益 | **+18.00 dB（打满）** | **+13.76 dB（未打满）** |
+  | 渐入期 | 17 秒冲到上限 | 172 帧 / 约 69 秒单调渐入，gain 与 ceiling 完全同步、单调不降 |
+  | 单向下调 | 7 次 / **-12.28 dB** / 3 分 27 秒 | 3 次 / **-4.60 dB** |
+  | 最终增益 | +5.72 dB | **+9.16 dB（多补 3.44 dB）** |
+  | 中位段落输出 | -28.32 dBFS | -24.88 dBFS（改善 3.44 dB） |
+  | 歌内 desired 上升 | 0 | **0（锁定期）**，低电平段最低 -24.75dBFS 期间未上升 |
+  | 旧机制残留 | — | `release/unlock/track decided` **0 次** |
+
+  - P80 上包络渐入期 -46.76→-25.78dBFS 只升不降；measured 波动跨度 35.99dB（确有人声与纯音乐强弱段落）。锁定事件 `desired=13.72dB p80=-25.72dB samples=173 ceiling=13.84dB`。
+  - 红线复核：偏响歌《怨苍天变了心》p80=-13.88dBFS，响亮档锁定 +1.88dB（标准档 -16 下按公式为 0dB），未被减也未被大幅补。
+- **如实标注的物理限制**：P80 达标 -12dBFS 意味着高位人声/副歌段已与别的歌对齐；中位/主歌段仍低约 12.9dB 是这首歌本身 16dB 动态范围所致，在「只补不减 + 无动态压缩」约束下无法消除（压缩会让峰值削波，用户此前明确要求移除压缩）。若真车机听感仍觉得偏小，后续可把百分位降到 P70（预计再多补约 3~5dB，峰值仍不削波）或给目标加 +3dB 偏置——属参数微调，需用户听感反馈后定，本轮未擅自改。
+- **档位纠正**：上一节末「测试后已把档位还原 standard」不成立（只改写 prefs 未 force-stop，App 内存态/后续写入覆盖回 `loud`）；本次复核确认实际仍为响亮档，为与旧数据同条件对比**全程保持 -12.0dBFS**。是否还原 standard 待用户决定，未擅自 force-stop 打断播放。
+- 产物：`build/app/outputs/flutter-apk/app-release.apk`，26,500,353 B，md5 `e2c81d16f86499805d049f674496ca71`，`versionCode=20280` / `versionName=2026.11.20`（**版本号未递增，与已发布的 v2026.11.20.1 相同**），正式签名 `CN=KA Music Release` / SHA-256 `76a87e47…`（`aapt dump badging` + `apksigner verify` 实证）。`flutter analyze` 14 项均为项目既有 info/warning；Kotlin 编译通过；`pubspec.lock` 已还原。
+- 状态：**未提交、未 push、未打 tag、未发 Release**；发版需先递增到 `+20281` 并重建（`v2026.11.20` 与 `v2026.11.20.1` 已占用，按 §7.3 应新建 `v2026.11.20.2`）。真车机逐曲听感仍未实测。
+
+**2026-11-20 续：修复「歌内纯音乐段落突变增益」（未发版，工作区未提交）**
+
+- 现象：自动增益下，每首歌里没有人声、只有伴奏/前奏/间奏的段落增益突然变大，人声进来又变小，反复跳变。
+- 根因（**算法模型缺陷，非参数问题**）：`onAgcMeasuredRms()` 每 400ms 拿**瞬时**短窗 RMS 直接算 `desiredGain = target - measured`。有人声的主歌/副歌电平高（-13~-16dBFS），纯音乐段落天生低 6~12dB（-22~-30dBFS），于是人声段 `desiredGain=0` 走「独立归零分支」把增益每步 -0.6dB 拉回 0 **并强制解锁**，间奏段 `desiredGain=+9` 又每步 +0.6dB 爬升，增益在 `0 ↔ +9dB` 间随人声进出反复跳。原「死区 + 锁定」防呼吸效应完全失效：段落电平差 8~12dB 远超 1.6dB 解锁阈值，且归零分支会立即清锁。
+- 修复（`MainActivity.kt`，收口到决策模型，不打补丁）：
+  - 决策依据改为**整曲代表性响度** `agcObservedPeakDb`（本曲迄今最高 RMS 的上包络，只升不降）；瞬时 `measured` 仅用于 UI 展示与更新上包络，绝不直接换算增益。
+  - 新增开场评估窗口 `AGC_EVALUATE_CYCLES=8`（3.2s）：只累积上包络、**不写增益**，避免用一段轻前奏草率定下高增益；窗口结束用 `peakHold` 一次性算出 `agcDesiredGainDb` 并 `agcLocked=true` 锁定整曲。
+  - 上包络只升不降 ⇒ `desiredGain` 只降不升 ⇒ 增益在一首歌内单调不增，**纯音乐段落永远无法把增益抬起来**。
+  - 已锁定后仅当出现比决策依据高 `1.5dB` 的更响段落（开场窗口只覆盖到轻前奏）才允许重估，且**只允许单向下调**（防过补与削波），日志 `AGC gain revised down`。
+  - 删除失效旧机制：0.8dB 死区、12/3 次锁定计数、独立归零分支、`AGC unlock/release`；统一为「按 0.6dB/步平滑逼近 `agcDesiredGainDb`」。
+  - 新增 `resetAgcTrackEstimate()` 统一清状态，覆盖 `configure` / `setAgcTarget` / `setAgcActive` / `resetAgcForTrackChange` / `startLoudnessAgc` / `stopLoudnessAgc`；`setAgcTarget` 在已锁定时立即用新目标重算，用户改档即时生效且不重开窗口。
+  - 保留全部既有语义：只补不减 `[0,+18]dB`、开环前馈、MBC 透明增益级、PEAK_RMS 测量、切歌先归位再播放、权限主动申请。
+- UI（`settings_page.dart`）：总开关副标题改「每首歌自动测定一次增益」，auto 策略副标题加「整曲测定后歌内不变」，实时增益 tile 把「测得」改「瞬时」并把「已稳定/调节中」改「已按整曲锁定/正在测定本曲」，避免用户看到瞬时值跳动却增益不变时误判为失灵。
+- **MuMu 车机实例（index 1 / Android 15）实测**：覆盖安装后冷启动自动续播，`configure: autoGain=true` → `AGC started: mode=PEAK_RMS`。标准档下连切 4 首，5 首歌各出现一次 `AGC track decided`，`desired` 均为 0 且锁定后**零 `AGC pulse`**（增益全程 0，无段落调整）。为覆盖偏轻歌，临时把档位改为「响亮」(-12dBFS) 重启再测：5 首歌 / 36 次 pulse，`measured` 波动跨度 **41.74dB**（-54.96~-13.22dBFS，确有人声与纯音乐强弱段落），而每首歌内 `desired` **全部非增、上升次数 0**；旧机制 `AGC release/unlock/locked` 出现 **0 次**，仅 1 次 `AGC gain revised down`（单向下调）。增益只在开场平滑收敛一次（含一首极轻歌 0→+18dB 上限，属既有「只补不减」语义，非歌内突变），歌内不再随段落跳变。**更正：当时「已还原 standard」的说法不成立**——只改写 prefs 未 force-stop，App 内存态/后续写入把档位覆盖回 `loud`；2026-11-20 复核确认实际仍为响亮档，因此后续所有对比测试均在 `-12.0dBFS` 同条件下进行。
+- 产物：`build/app/outputs/flutter-apk/app-release.apk`，26,499,833 B，md5 `0ba2156f26ab7a1edee69d3e730b84cf`，`versionCode=20280` / `versionName=2026.11.20`（**版本号未递增，与已发布的 v2026.11.20.1 相同**），正式签名 SHA-256 `76a87e47…` 未变。`flutter analyze` 14 项均为项目既有 info/warning，无新增问题；`pubspec.lock` 已还原。
+- 状态：**未提交、未 push、未打 tag、未发 Release**；发版需先递增到 `+20281` 并重建（`v2026.11.20` 与 `v2026.11.20.1` tag/Release 均已占用，按 §7.3 应新建 `v2026.11.20.2`）。真车机逐曲听感仍未实测。
 
 **2026-11-20 发版后修复：打开音量均衡开关未主动申请 RECORD_AUDIO（已发版 v2026.11.20.1）**
 
@@ -196,7 +306,7 @@ MuMu 点击坐标换算（防再次踩坑）：MuMu 窗口 `nemuwin` 为 1366×7
 - CI 决策：`ios/windows-build.yml` 仅手动触发（计费 + 配额）；`flutter-ci.yml` 无 push 触发。
 - R8 fullMode + shrinkResources 开启：APK **31.4 MB → 25.2 MB**（-20%），原生层静态引用安全。
 
-线上最新 Release：**v2026.11.20**（2026-11-20 发布，release commit `f5a14df`，versionCode 20279），资产 `app-release.apk` 26,499,409 B，正式签名。此前 v2026.11.19（20267）与 v2026.11.20（20273~20278）均未单独发版，全部并入本次累计发布。
+线上最新 Release：**v2026.11.20.2**（2026-11-20 发布，versionCode 20281），资产 `app-release.apk` 26,500,897 B，正式签名。此前 v2026.11.19（20267）与 v2026.11.20（20273~20278）均未单独发版，全部并入 `v2026.11.20` 累计发布；`v2026.11.20.1`（20280）、`v2026.11.20.2`（20281）为其后的同日修订版。
 
 已发布版本链（每个 tag = 一次发版）：
 
@@ -209,10 +319,11 @@ MuMu 点击坐标换算（防再次踩坑）：MuMu 窗口 `nemuwin` 为 1366×7
 | v2026.10.31 | 20265 | 黑胶重做（深黑盘体+窄叶方向光+极简外缘）、停止跟踪 `pkkuwo/` | 本地构建 + 手动发布 |
 | v2026.11.20 | 20279 | 累计发版：实时响度 AGC 全链路、车机全屏差集、上游功能合入、R8 裁剪 | 本地构建 + 手动发布 |
 | v2026.11.20.1 | 20280 | 修复打开音量均衡开关未主动申请 `RECORD_AUDIO`（同日修订版） | 本地构建 + 手动发布 |
+| v2026.11.20.2 | 20281 | 四轮 AGC 修复（歌内突变 / P80 / 开场快测一次给足 / +15 上限）+ 复审三处逻辑缺陷收口（同日修订版二） | 本地构建 + 手动发布 |
 
 **版本链说明**：`3773922`（20266）→ … → `79b6ccc`（车机差集）→ `02c8bed`（音量均衡 +3dB）
 → 20267 版本推进与仓库整理 → `5e6756d`（可调音量增益）等，最终全部随 `v2026.11.20`
-一起发版（versionCode 20279）；`v2026.11.20.1` 为该版之后的同日单项修订。
+一起发版（versionCode 20279）；`v2026.11.20.1` 为该版之后的同日单项修订，`v2026.11.20.2` 为再之后的累计修订（四轮 AGC 修复 + 复审收口，20281）。
 
 相对上游的私有差异共 83 文件（+7277 / −431），大头是 `android/` 原生播放器与 `third_party/flutter_lyric/`。
 
@@ -390,6 +501,7 @@ sleep 8; "$MM" sh -v 1 --cmd "input tap 190 260"   # 点迷你播放器封面 �
 
 ## 10. 待办与已知问题
 
+- [x] ~~发版 20281~~：**已于 2026-11-20 发布**（同日修订版二 tag `v2026.11.20.2`，versionCode 20281，资产 md5 `c4d60dbf…`；tag object SHA / Release id 见续五节补记）。因 `v2026.11.20`、`v2026.11.20.1` tag/Release 已占用且按 §7.3 不得改写已发布历史，故新建 `v2026.11.20.2`，上两版保持不动。
 - [x] ~~发版 20280~~：**已于 2026-11-20 发布**（同日修订版 tag `v2026.11.20.1`，Release id 452112971，HEAD `2cb77ce`，正文 900 字符带 markdown，资产 md5 `9a19172c…`）。因 `v2026.11.20` tag/Release 已占用且按 §7.3 不得改写已发布历史，故新建同日修订版 tag，上一版保持不动。
 - [x] ~~下次发版 20265~~：**已于 2026-10-31 发布**（tag `v2026.10.31`，Release id 429646924，正文带 markdown）。
 - [x] ~~下次发版 20273~~：**已于 2026-11-20 发布**（tag `v2026.11.20`，Release id 451755386，HEAD `f5a14df`，versionCode 20279，正文带 markdown）。以下为当时的发版清单，留作历史记录。含此前 20267 的全部 ①全屏页渲染节流（`d02b51d`，§3.5）②两批上游合并（收藏/排行榜/R8/打断修复/蓝牙防外放/下载元数据）③R8 裁剪 ④车机全屏差集 5 项功能（`79b6ccc`）⑤音量均衡恢复增益补偿 +3dB（`02c8bed`）⑥可调音量增益 0~+12dB（`5e6756d`）⑦实时响度自动增益 AGC（`6469f47`）⑧AGC 设置菜单假死修复（`c1b8967`）⑨auto/fixed 策略切换卡顿优化（`5bec594`）⑩实时增益自动轮询（`9ea8b4a`）⑪自动增益方向错乱修复（`df0a18e`）⑫**官方 PEAK_RMS 测量替换 8bit 波形手算**（`c1c2cbf`，测得值准确性根治，MuMu 日志实测验证）。剩：真车机实测过门（含 AGC 逐曲听感与削顶、菜单连点、策略切换手感、轮询数值变化、响/轻歌增益方向） → 打 tag `v2026.11.20` → 用本地 APK（md5 `663f1786…`）发 Release。**发版门（历史表述，语义已过时）：真车机实测悬浮视频流畅 + 来电/蓝牙断开行为 + AGC 自动增益听感（现行语义为「偏轻的歌补增益、正常/偏响的歌保持原样」，非「响歌减增益」）+ 设置菜单不假死 + 策略切换不卡顿 + 轮询刷新数值**。注：真车机逐曲听感仍未实测，MuMu 已覆盖安装、效果链与 AGC 日志实证。
