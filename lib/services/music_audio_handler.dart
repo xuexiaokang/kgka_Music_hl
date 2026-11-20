@@ -296,7 +296,7 @@ class MusicAudioHandler extends BaseAudioHandler
       if (sessionId != _playSessionId) return;
       try {
         debugPrint(
-          '[KA Music][playback] start-attempt=${attempt + 1} '
+          '[九九音乐][playback] start-attempt=${attempt + 1} '
           'state=${audioPlayer.processingState.name}',
         );
         if (isMobileOrMac) {
@@ -305,7 +305,7 @@ class MusicAudioHandler extends BaseAudioHandler
             await session.setActive(true);
           } catch (e) {
             debugPrint(
-              '[KA Music][playback] audio session setActive failed: $e',
+              '[九九音乐][playback] audio session setActive failed: $e',
             );
           }
         }
@@ -332,7 +332,7 @@ class MusicAudioHandler extends BaseAudioHandler
 
         if (audioPlayer.playing) {
           debugPrint(
-            '[KA Music][playback] start-attempt=${attempt + 1} stable',
+            '[九九音乐][playback] start-attempt=${attempt + 1} stable',
           );
           return;
         }
@@ -341,7 +341,7 @@ class MusicAudioHandler extends BaseAudioHandler
         if (sessionId != _playSessionId) return;
         lastError = error;
         debugPrint(
-          '[KA Music][playback] start-attempt=${attempt + 1} failed: $error',
+          '[九九音乐][playback] start-attempt=${attempt + 1} failed: $error',
         );
       }
 

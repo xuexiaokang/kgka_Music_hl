@@ -91,7 +91,7 @@ class _ImportPlaylistSheetState extends State<ImportPlaylistSheet> {
     final result = _result;
     if (result == null) return;
     if (!widget.auth.isLoggedIn) {
-      setState(() => _error = '请先登录 KA Music 的酷狗账号，再导入歌单');
+      setState(() => _error = '请先登录 九九音乐 的酷狗账号，再导入歌单');
       return;
     }
     if (_selectedListId == _newPlaylist &&

@@ -3,9 +3,9 @@ import 'package:shared_preferences/shared_preferences.dart';
 class AppConfig {
   const AppConfig._();
 
-  static const appName = 'KA Music';
+  static const appName = '九九音乐';
   static const appVersion = '2026.11.20';
-  static const appVersionCode = '20281';
+  static const appVersionCode = '20282';
 
   static const _defaultApiBaseUrl = 'https://music.api.hoilai.cn';
   static const _customBaseUrlKey = 'settings.custom_api_base_url';
@@ -23,7 +23,7 @@ class AppConfig {
   // ===== 缓存与下载配置 =====
   /// 数据缓存目录名 / 下载目录名 / 播放缓存目录名
   static const cacheDirName = 'ka_music_cache';
-  static const downloadDirName = 'KA Music';
+  static const downloadDirName = '九九音乐';
   static const playCacheDirName = 'ka_music_play_cache';
 
   /// 数据缓存 TTL（分级）

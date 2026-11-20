@@ -150,7 +150,7 @@ class DownloadController extends ChangeNotifier {
       _saveLyricsFile = prefs.getBool(_saveLyricsFileKey) ?? false;
       await _loadDownloads();
     } catch (error) {
-      debugPrint('[KA Music] Failed to restore download index: $error');
+      debugPrint('[九九音乐] Failed to restore download index: $error');
     } finally {
       if (!_downloadIndexReady.isCompleted) {
         _downloadIndexReady.complete();
@@ -167,7 +167,7 @@ class DownloadController extends ChangeNotifier {
       await _loadPlayCache();
       await _prunePlayCache(excludePaths: const {});
     } catch (error) {
-      debugPrint('[KA Music] Failed to restore play cache: $error');
+      debugPrint('[九九音乐] Failed to restore play cache: $error');
     }
     notifyListeners();
   }
@@ -299,7 +299,7 @@ class DownloadController extends ChangeNotifier {
         await _downloadIndexReady.future.timeout(_playbackFileCheckTimeout);
       } on TimeoutException {
         debugPrint(
-          '[KA Music][playback] download-index timeout; use network source',
+          '[九九音乐][playback] download-index timeout; use network source',
         );
         return null;
       }
@@ -339,12 +339,12 @@ class DownloadController extends ChangeNotifier {
       return await _service.fileSize(path).timeout(_playbackFileCheckTimeout);
     } on TimeoutException {
       debugPrint(
-        '[KA Music][playback] local-file check timeout; use network source',
+        '[九九音乐][playback] local-file check timeout; use network source',
       );
       return null;
     } catch (error) {
       debugPrint(
-        '[KA Music][playback] local-file check failed; use network source: '
+        '[九九音乐][playback] local-file check failed; use network source: '
         '$error',
       );
       return null;

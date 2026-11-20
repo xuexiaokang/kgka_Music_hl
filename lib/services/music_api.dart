@@ -1155,12 +1155,12 @@ class MusicApi {
       'type': 'song',
     });
     if (kDebugMode) {
-      debugPrint('[KA Music][search] keywords="$keywords"');
-      debugPrint('[KA Music][search] raw type: ${raw.runtimeType}');
+      debugPrint('[九九音乐][search] keywords="$keywords"');
+      debugPrint('[九九音乐][search] raw type: ${raw.runtimeType}');
       if (raw is List) {
-        debugPrint('[KA Music][search] list length: ${raw.length}');
+        debugPrint('[九九音乐][search] list length: ${raw.length}');
       } else if (raw is Map) {
-        debugPrint('[KA Music][search] map keys: ${raw.keys.toList()}');
+        debugPrint('[九九音乐][search] map keys: ${raw.keys.toList()}');
       }
     }
     // API returns either a plain array or { songs: [...] }
@@ -2081,7 +2081,7 @@ void _debugLyricLog(String message) {
   if (!AppConfig.debugLyrics || !kDebugMode) {
     return;
   }
-  debugPrint('[KA Music][lyrics] $message');
+  debugPrint('[九九音乐][lyrics] $message');
 }
 
 void _debugLyricLogObject(String label, Object? value) {
@@ -2096,13 +2096,13 @@ void _debugLyricContent(String label, String content) {
   if (!AppConfig.debugLyrics || !kDebugMode) {
     return;
   }
-  debugPrint('[KA Music][lyrics] ==== $label ====');
+  debugPrint('[九九音乐][lyrics] ==== $label ====');
   const chunkSize = 1800;
   for (var start = 0; start < content.length; start += chunkSize) {
     final end = (start + chunkSize).clamp(0, content.length);
     debugPrint(content.substring(start, end));
   }
-  debugPrint('[KA Music][lyrics] ==== end $label ====');
+  debugPrint('[九九音乐][lyrics] ==== end $label ====');
 }
 
 void _debugPlaylistLogObject(String label, Object? value) {
@@ -2110,13 +2110,13 @@ void _debugPlaylistLogObject(String label, Object? value) {
     return;
   }
   final text = const JsonEncoder.withIndent('  ').convert(value);
-  debugPrint('[KA Music][playlists] ==== $label ====');
+  debugPrint('[九九音乐][playlists] ==== $label ====');
   const chunkSize = 1800;
   for (var start = 0; start < text.length; start += chunkSize) {
     final end = (start + chunkSize).clamp(0, text.length);
     debugPrint(text.substring(start, end));
   }
-  debugPrint('[KA Music][playlists] ==== end $label ====');
+  debugPrint('[九九音乐][playlists] ==== end $label ====');
 }
 
 void _debugArtistLogObject(String label, Object? value) {
@@ -2124,11 +2124,11 @@ void _debugArtistLogObject(String label, Object? value) {
     return;
   }
   final text = const JsonEncoder.withIndent('  ').convert(value);
-  debugPrint('[KA Music][artist] ==== $label ====');
+  debugPrint('[九九音乐][artist] ==== $label ====');
   const chunkSize = 1800;
   for (var start = 0; start < text.length; start += chunkSize) {
     final end = (start + chunkSize).clamp(0, text.length);
     debugPrint(text.substring(start, end));
   }
-  debugPrint('[KA Music][artist] ==== end $label ====');
+  debugPrint('[九九音乐][artist] ==== end $label ====');
 }

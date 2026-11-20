@@ -53,28 +53,27 @@ class MainActivity : AudioServiceActivity() {
     private var dynamicsProcessing: DynamicsProcessing? = null
     private var dynamicsProcessingSessionId: Int? = null
 
-    // 实时响度 AGC：开场快速测定本曲响度，几秒内一次给足增益，随后整曲冻结。
+    // 音量均衡 AGC：开环前馈 + 整曲响度预置 + 整曲锁定（续十二已删除开场测定）。
     // 关键纪律：
-    // 1) 决策依据是开场 4.8 秒（最多 12 个有效样本）的 P80 分位的【只升不降上包络】，
-    //    不是瞬时 RMS，也不是整曲最大值。实测《别怕我伤心》峰值 -17.7dBFS、中位
-    //    -34dBFS（动态 16dB）：用最大值定增益只补 +5.7dB，人声/主歌段落仍明显偏小；
-    //    用瞬时值则会随人声进出反复突跳。P80 兼顾「代表本曲感知响度」与「不被少数
-    //    尖峰带偏」。注意：12 个样本即锁定，不存在「最近 30 秒」的滚动窗口。
-    // 2) 「一次给足」：上一版用 0.2dB/秒的缓升上限防开场打满，实测偏小声歌曲切歌
-    //    后 5 秒仅 +1.04dB、要 68 秒才补够 +14.6dB，整首歌前半段几乎没补偿，用户
-    //    反馈「反而比之前更小声」。现改为开场测量期（约 4.8 秒）边测边以
-    //    AGC_FAST_RISE_DB=2dB/步（5dB/s）快速给足，窗口结束即冻结 desired，
-    //    整曲不再改变 —— 既不长时间小声，也不会随人声进出突变。
-    //    实测极轻歌曲开场 p80 低至 -40dBFS，rawDesired 远超上限，desired 会直接
-    //    打满 AGC_AUTO_MAX_GAIN_DB=15dB：稳定性来自这个【上限保护】，不是 P80 与
-    //    增益「自然相交」；旧注释把两者说成同一回事，属过度描述，已订正。
-    // 3) 只补不减 [0,+15]dB（auto）：靠 MBC 退化成的透明增益级 postGain；
-    //    上限由峰值余量定，避免把人声段推过 0dBFS 让 limiter 持续限幅。
-    //    上升快、下降慢（0.6dB/步），避免任何听感上的音量突降；用户主动改目标
-    //    响度档位时临时放开下降步长，避免改档后十几秒才生效。
-    // 4) 开环前馈：Visualizer 测不到 postGain 之后的电平，禁用「gain += error」积分律。
-    // 5) 音频会话重建（蓝牙/USB 切换）时保留已冻结的增益，不重新开场测定，
-    //    否则 +15dB 会瞬间归零再花几秒升回，用户听到明显音量骤降。
+    // 0) 增益唯一来源是 Dart 下发的预置值：按音源 `/song/url` 的 `volume`
+    //    （整曲平均电平，实测 12/12 覆盖 -16.4~-4.7dBFS）或曲库均值先验算出
+    //    gain = target - volume，经 resetAgcForTrackChange(presetGainDb) 在出声前
+    //    同步下发，原生直接写 postGain 并锁定，整曲不再改变。
+    //    开场 4.8 秒 P80 测定（续一~续五）自续六起被整曲元数据预置取代，续十二
+    //    彻底删除：长低音前奏会因开场样本误判打满 +15dB（《是否我真的一无所有》
+    //    开场 P80=-40.96dBFS、整曲 volume=-11.8dBFS，两者差 15dB）。
+    // 1) 双向归一化：gain 可以为正（补轻歌）也可以为负（压响歌），范围
+    //    [-24,+15]dB，所有歌落在同一目标响度。负增益只靠 MBC 透明增益级
+    //    postGain 实现，无压缩、无音染；+15 上限留峰值余量，由 limiter(-1dBFS) 兜住。
+    // 2) 开环前馈：实测 Visualizer 读数不包含 postGain，闭环「gain += error」
+    //    积分律不成立，增益不跟随瞬时电平。
+    // 3) Visualizer 常驻但只做两件事：UI 瞬时电平展示 + 整曲 RMS 累积
+    //    （续十一，切歌结算后用于无元数据歌曲的响度缓存与口径标定）。
+    //    累积独立于 agcActive / agcLocked，fixed 模式与锁定后都继续采样。
+    // 4) configure / 音频会话重建（蓝牙/USB 切换）时保留已锁定的增益，
+    //    不重新测定，否则增益会瞬间归零，用户听到明显音量骤降。
+    // 5) 改档 / 切策略后由上层立即重新下发预置值；在此之前增益保持中性
+    //    0dB，不再有「开场测定」兜底，避免误判。
     private var loudnessVisualizer: Visualizer? = null
     // agcEnabled = Visualizer 是否在跑（音效开启期间常驻）；
     // agcActive = 当前是否把 AGC 结果写进 postGain（auto=true / fixed=false）。
@@ -82,23 +81,22 @@ class MainActivity : AudioServiceActivity() {
     private var agcEnabled = false
     private var agcActive = false
     private var agcCurrentGainDb = DEFAULT_VOLUME_GAIN_DB // 当前实际写入 postGain 的增益
-    private var agcDesiredGainDb = 0.0f // 平滑逼近的目标增益
+    private var agcDesiredGainDb = 0.0f // 平滑逼近的目标增益（预置时与 current 相等）
     private var agcTargetRmsDb = DEFAULT_TARGET_RMS_DB
-    // 本曲代表性响度（开场 P80 上包络，只升不降）
-    private var agcRepresentativeDb = Float.NEGATIVE_INFINITY
-    // 冻结增益时依据的代表性响度；用户改档时用它重算 desired（旧注释「单向下调」已失效）
+    // 冻结增益时依据的「本曲整曲响度」：由 target - preset 反推，改档时用
+    // (新target - decision) 重算 desired。
     private var agcDecisionDb = 0.0f
-    // 开场测量窗口（最多 AGC_DECIDE_CYCLES 个有效样本，4.8 秒），用于计算 P80
-    private val agcLoudnessWindow = FloatArray(AGC_DECIDE_CYCLES)
-    private var agcWindowCount = 0
-    private var agcWindowIndex = 0
-    // 开场测量期的有效样本计数，到 AGC_DECIDE_CYCLES 即冻结增益
-    private var agcMeasureCycles = 0
-    // 测量窗口结束、desired 已冻结（对应 UI「已锁定本曲增益」）
+    // 锁定 = 本曲增益已冻结，唯一来源是 applyPresetGain。
     private var agcLocked = false
     // 用户主动改目标响度档位后置位：临时放开下降步长，让改档快速生效
     private var agcTargetAdjusting = false
     private var lastMeasuredRmsDb = 0.0f // 瞬时电平，仅用于 UI 展示
+    // ---- 整曲响度累积（续十一）----
+    // 与增益决策完全独立：增益锁定后、fixed 模式下仍继续采样，直到切歌结算。
+    // Visualizer 读数不包含 postGain（见 1247 注释），所以累积值就是原始素材电平，
+    // 无需反算增益。线性功率域累加 Σ10^(dB/10)，避免对 dB 取算术平均偏低 1~3 dB。
+    private var trackRmsPowerSum = 0.0
+    private var trackRmsSamples = 0
     // 官方 PEAK_RMS 测量：后台线程轮询 getMeasurementPeakRms，避免主线程 binder 调用。
     private var agcMeasureThread: HandlerThread? = null
     private var agcMeasureHandler: Handler? = null
@@ -114,17 +112,19 @@ class MainActivity : AudioServiceActivity() {
         private const val TAG_VOLUME_NORMALIZATION = "VolumeNormalization"
         private const val DEFAULT_VOLUME_GAIN_DB = 3.0f
 
-        // AGC 目标 RMS（dBFS）。-16dBFS ≈ 流媒体常见响度，留 4dB 峰值余量给 limiter。
-        private const val DEFAULT_TARGET_RMS_DB = -16.0f
-        // 响度目标（dBFS）的合法范围，与增益范围（AGC_MIN/MAX_GAIN_DB）是两回事。
-        // 之前误用增益范围 [-8,18] clamp 目标，把 -20/-16/-12 全抬到 -8，档位失效。
+        // AGC 目标 RMS（dBFS）。续九整体 +4dB：默认标准 -12dBFS 按实车听感
+        // 对齐网易云（≈ -10 LUFS），比 Spotify/YouTube 的 -14 LUFS 响 4dB。
+        // 峰值余量相应收紧，由 limiter(-1dBFS) 兜住越过 0dBFS 的峰值。
+        private const val DEFAULT_TARGET_RMS_DB = -12.0f
+        // 响度目标（dBFS）的合法范围，与增益范围是两回事。
+        // 之前误用增益范围 [-8,18] clamp 目标，把当时的三档全抬到 -8，档位失效。
+        // （续九后的新三档为 -16/-12/-8，仍在 [-40,-3] 内，不会被此处截断。）
         private const val AGC_MIN_TARGET_DBFS = -40.0f
         private const val AGC_MAX_TARGET_DBFS = -3.0f
-        // 只补不减：正常/偏响的歌保持原样，不再被减增益（用户明确反馈「正常歌反而被减最多」）。
-        // 纯在线流无法预知整曲 LUFS，端上测量只适合把偏轻的歌补上来；减去增益既无可靠
-        // 依据（测量点不含 postGain），又会把正常歌越调越小。
-        private const val AGC_MIN_GAIN_DB = 0.0f
-        private const val AGC_MAX_GAIN_DB = 18.0f
+        // 预置增益（双向归一化）的下限：volume 比目标响度高多少就衰减多少。
+        // -24dB 覆盖实测最响的歌（volume=-4.7dBFS 配轻柔档 -16 → -11.3dB）并留余量。
+        // 负增益靠 postGain 直接衰减，不引入压缩，也不会削波。
+        private const val AGC_PRESET_MIN_GAIN_DB = -24.0f
 
         // 单 band MBC 的最高处理频率取设备输出采样率的 Nyquist：既保证全频通过，
         // 也确保落在 native 层允许的合法范围内（传远超 Nyquist 的固定大值可能被拒绝，
@@ -137,23 +137,14 @@ class MainActivity : AudioServiceActivity() {
             }
             (if (sampleRate > 0) sampleRate else 48000) / 2.0f
         }
-        // RMS 轮询周期 400ms；下降每步最多 0.6dB（慢），上升每步最多 2.0dB（快）。
+        // RMS 轮询周期 400ms；下降每步最多 0.6dB（慢），上升/改档每步最多 2.0dB（快）。
         private const val AGC_SAMPLE_INTERVAL_MS = 400L
         private const val AGC_MAX_STEP_DB = 0.6f
         private const val AGC_FAST_RISE_DB = 2.0f
-        // 自动模式增益上限（比固定档的 AGC_MAX_GAIN_DB=18 更保守）。开场 4.8 秒窗口
-        // 常只覆盖轻前奏，P80 可能低到 -38~-40dBFS，按 target 算会直接打满 +18；而大动态
-        // 歌曲人声峰值约 -17.7dBFS，+18 会推到 0dBFS 以上、让 limiter 持续限幅（音质
-        // 劣化，用户明确要求避免）。+15 仍比旧版 +5.7dB 多补约 9dB，且留约 3dB 峰值
-        // 余量；无论开场采到前奏还是人声，最终都稳定收敛到 +14.6~15dB，不再随机打满。
+        // 自动模式增益上限：由峰值余量定，避免推过 0dBFS 让 limiter 持续限幅
+        // （音质劣化，用户明确要求避免）。
         private const val AGC_AUTO_MAX_GAIN_DB = 15.0f
-        // 开场测量窗口：12 个有效样本（400ms × 12 = 4.8 秒）即冻结增益。P80 只基于
-        // 这 12 个样本，锁定后不再入窗——不存在「最近 30 秒 / 75 样本」的滚动窗口
-        // （旧代码把窗口开成 75，但 12 个样本就锁定，注释与实现不符，已订正）。
-        // 实测《别怕我伤心》约 2 秒内 P80 从轻前奏 -46.9 升到 -26.6dBFS 并稳定。
-        private const val AGC_DECIDE_CYCLES = 12
-        private const val AGC_PERCENTILE = 0.80f
-        // 低于此 RMS 视为静音/弱段落，不参与本曲响度估计（否则底噪被当作歌曲响度）。
+        // 低于此 RMS 视为静音/弱段落，不计入整曲响度累积（否则底噪被当作歌曲响度）。
         private const val AGC_SILENCE_RMS_DB = -55.0f
     }
 
@@ -342,6 +333,7 @@ class MainActivity : AudioServiceActivity() {
                                 "measuredRmsDb" to lastMeasuredRmsDb.toDouble(),
                                 "targetRmsDb" to agcTargetRmsDb.toDouble(),
                                 "locked" to agcLocked,
+                                "trackRmsSamples" to trackRmsSamples,
                             )
                         }.onSuccess { status ->
                             result.success(status)
@@ -369,15 +361,20 @@ class MainActivity : AudioServiceActivity() {
                         val applied = setAgcActive(active, gainDb)
                         result.success(applied)
                     }
-                    // 切歌归位：在新歌出声前同步调用，把 postGain 从上一首收敛值
-                    // 立即打回基准档位并清掉 AGC 状态，避免轻歌的高增益被带到下一首
-                    // 造成开头爆音。不重建效果器 / Visualizer，同步且零卡顿。
+                    // 切歌归位：在新歌出声前同步调用，直接按整曲响度预置并锁定增益。
+                    // 不重建效果器 / Visualizer，同步且零卡顿。
+                    // targetRmsDb 一并带下来：applyPresetGain 要用它反推整曲响度
+                    // （decision = target - gain），保证改档重算基准正确。
                     "resetAgcForTrackChange" -> {
-                        val gainDb =
-                            (call.argument<Double>("gainDb")
-                                ?: DEFAULT_VOLUME_GAIN_DB.toDouble()).toFloat()
-                        result.success(resetAgcForTrackChange(gainDb))
+                        val presetGainDb =
+                            (call.argument<Double>("presetGainDb") ?: 0.0).toFloat()
+                        val targetRmsDb = call.argument<Double>("targetRmsDb")?.toFloat()
+                        result.success(
+                            resetAgcForTrackChange(presetGainDb, targetRmsDb)
+                        )
                     }
+                    // 续十一：切歌前结算上一曲整曲 RMS，写进 Dart 侧响度缓存。
+                    "consumeTrackRms" -> result.success(consumeTrackRms())
                     else -> result.notImplemented()
                 }
             }
@@ -1066,23 +1063,22 @@ class MainActivity : AudioServiceActivity() {
                 "configure: enabled=$enabled autoGain=$autoGain gainDb=$gainDb " +
                     "targetRmsDb=$targetRmsDb session=$audioSessionId"
             )
-            // 音频会话重建（车机蓝牙/USB 切换）不应把已冻结的增益归零再重新测定：
-            // 否则 +15dB 会瞬间掉到 0、再花 3~5 秒升回，用户听到明显音量骤降。
-            // 切歌路径天然安全：playSong 的 resetAgcForTrackChange 会清 agcLocked
-            // 并归零，且在 play() 之前同步 await；即便 session 回调抢在它之前，
-            // 随后的归位与 configure 仍会把新歌重置到 0dB。
-            val previousSessionId = dynamicsProcessingSessionId
-            val sessionChanged = previousSessionId != null && previousSessionId != audioSessionId
-            val preserveLockedGain = autoGain && agcLocked && sessionChanged
+            // 已锁定时，configure 不得把当前增益归零：
+            // - 音频会话重建（车机蓝牙/USB 切换）：否则增益瞬间掉到 0，用户听到
+            //   明显音量骤降；
+            // - 切歌预置：resetAgcForTrackChange 已按整曲响度锁定，configure 若
+            //   清掉就会让本曲在重新预置前保持中性 0dB。
+            // 需要重置的场景（开关/策略变更）都由调用方先清掉 agcLocked，
+            // 因此这里的判断不需要再看 session 是否变化。
+            val preserveLockedGain = autoGain && agcLocked
             val preservedGain = if (preserveLockedGain) agcCurrentGainDb else 0f
             val preservedDecisionDb = if (preserveLockedGain) agcDecisionDb else 0f
 
             val effect = ensureDynamicsProcessing(audioSessionId)
 
             // 静态模式：postGain 固定为设置页下发的 gainDb（旧行为，权限被拒时的兜底）。
-            // 自动模式：postGain 由 AGC 前馈环维护，起点固定为中性 0dB——不能用固定增益档
+            // 自动模式：postGain 由 Dart 预置值维护，起点固定为中性 0dB——不能用固定增益档
             // （可能是 +12dB）做起点，否则响歌一上来被放大、切歌开头爆音。
-            // 只补不减：fixed [0,+18]dB / auto [0,+15]dB。
             agcTargetRmsDb = targetRmsDb.coerceIn(AGC_MIN_TARGET_DBFS, AGC_MAX_TARGET_DBFS)
             val initialGain = if (autoGain) preservedGain else gainDb
             agcCurrentGainDb = initialGain
@@ -1094,29 +1090,27 @@ class MainActivity : AudioServiceActivity() {
             // auto 时正常收敛。这样 auto↔fixed 切换零 binder 重建、不卡顿。
             agcActive = autoGain
             if (autoGain && !preserveLockedGain) {
-                // configure 总是把 postGain 写回 0dB 起点，本曲响度估计必须一并重置，
-                // 否则评估窗口 / 上包络会沿用上一首歌的数据。
-                resetAgcTrackEstimate()
+                // configure 总是把 postGain 写回 0dB 起点，增益状态一并归零，
+                // 等上层随后下发预置值；不做任何测量或推测。
+                resetAgcGainState()
             }
             // 只要音效开启且有权限，就保持 Visualizer 常驻（幂等，已启动直接返回）。
             // fixed 模式也启动，是为了切到 auto 时零延迟——代价仅是一次轻量采样回调。
             startLoudnessAgc(audioSessionId)
             if (preserveLockedGain) {
                 // ensureDynamicsProcessing → releaseDynamicsProcessing → stopLoudnessAgc
-                // 以及 startLoudnessAgc 都会 resetAgcTrackEstimate，故在最后统一恢复
-                // 冻结状态；并显式写回 postGain，抵消 startLoudnessAgc 首帧可能写下的
-                // 0.6dB 慢降。窗口不必恢复：锁定后不再估计，改档只用 agcDecisionDb。
+                // 都会重置增益状态，故在最后统一恢复冻结状态；并显式写回 postGain，
+                // 抵消 startLoudnessAgc 首帧可能写下的 0.6dB 慢降。
+                // 改档只用 agcDecisionDb，无需恢复任何测量窗口。
                 agcCurrentGainDb = preservedGain
                 agcDesiredGainDb = preservedGain
                 agcDecisionDb = preservedDecisionDb
-                agcRepresentativeDb = preservedDecisionDb
-                agcMeasureCycles = AGC_DECIDE_CYCLES
                 agcLocked = true
                 agcTargetAdjusting = false
                 applyMbcAndLimiter(effect, preservedGain)
                 Log.d(
                     TAG_VOLUME_NORMALIZATION,
-                    "AGC preserved across session change: gain=$preservedGain"
+                    "AGC preserved locked gain across configure: gain=$preservedGain"
                 )
             }
             return true
@@ -1211,20 +1205,16 @@ class MainActivity : AudioServiceActivity() {
     // ---------- 实时响度 AGC ----------
     // Visualizer 与 DynamicsProcessing 挂在同一 audioSessionId，但 Android 不保证 effect 链
     // 顺序：实测 Visualizer 读到的电平并不包含 postGain 的变化，闭环假设不成立。
-    // 因此只用开环前馈：开场 4.8 秒测定本曲开场代表性响度并快速给足增益，随后冻结整曲。
-    // 增益不跟随瞬时电平，避免人声/间奏段落之间突变，也不会长时间偏小声。
+    // 因此只用开环前馈：增益完全由 Dart 按整曲响度预置，锁后整曲不变。
+    // Visualizer 只负责 UI 瞬时电平与整曲 RMS 累积（续十一），不驱动增益。
 
-    /// 重置「本曲响度估计」。切歌、开关/策略变更、Visualizer 重启时调用。
-    /// 注意：目标响度档位变更【不】走这里——setAgcTarget 只重算 desired，保留窗口
-    /// 与锁定状态，避免歌内重新出现开场测定与跳变（旧注释误列为调用点，已订正）。
+    /// 重置本曲增益状态。切歌、开关/策略变更、Visualizer 启停时调用。
+    /// 续十二：开场测定窗口删除后不再有「本曲响度估计」，这里只把增益归零
+    /// 并解除锁定；真正的增益由 Dart 随后下发的 applyPresetGain 建立。
+    /// 中间态是中性 0dB，不做任何测量或推测，避免长前奏误判。
     /// 只清内存状态，不碰 DynamicsProcessing / Visualizer 的创建与 release（binder 同步
     /// 调用会卡主线程）；postGain 由各调用点自行写回起点。
-    private fun resetAgcTrackEstimate() {
-        agcLoudnessWindow.fill(Float.NaN)
-        agcWindowCount = 0
-        agcWindowIndex = 0
-        agcMeasureCycles = 0
-        agcRepresentativeDb = Float.NEGATIVE_INFINITY
+    private fun resetAgcGainState() {
         agcDecisionDb = 0.0f
         agcDesiredGainDb = 0.0f
         agcLocked = false
@@ -1232,7 +1222,7 @@ class MainActivity : AudioServiceActivity() {
     }
 
     /// 轻量更新目标响度：只改字段，不重建效果器 / Visualizer。
-    /// 供设置页切换响度档位调用，避免重建音频效果器带来的主线程 binder 阻塞。
+    /// （当前上层改档走 resetAgcForTrackChange 整体重算，此通道保留作轻量备选。）
     /// 用户主动改档是明确意图，置 agcTargetAdjusting 临时放开下降步长，让改档快速生效。
     private fun setAgcTarget(targetRmsDb: Float): Boolean {
         val clamped = targetRmsDb.coerceIn(AGC_MIN_TARGET_DBFS, AGC_MAX_TARGET_DBFS)
@@ -1240,11 +1230,11 @@ class MainActivity : AudioServiceActivity() {
         agcTargetAdjusting = true
         if (agcLocked) {
             // 本曲增益已冻结：用新目标立即重算（用户主动改档，允许升/降），
-            // 不重置窗口/测量计数，避免重新出现开场测定与歌内跳变。
+            // 不解除锁定，避免歌内重新出现增益跳变。
             agcDesiredGainDb = (clamped - agcDecisionDb)
-                .coerceIn(AGC_MIN_GAIN_DB, AGC_AUTO_MAX_GAIN_DB)
+                .coerceIn(AGC_PRESET_MIN_GAIN_DB, AGC_AUTO_MAX_GAIN_DB)
         }
-        // 未锁定时无需处理：下一帧会用新 target + 已累积的代表性响度自然重算。
+        // 未锁定时无需处理：等上层下发预置值时会带上新 target。
         Log.d(
             TAG_VOLUME_NORMALIZATION,
             "setAgcTarget: target=${clamped}dB desired=$agcDesiredGainDb"
@@ -1256,8 +1246,8 @@ class MainActivity : AudioServiceActivity() {
     /// Visualizer 在音效开启期间常驻，两种模式共用，避免切换时的主线程 binder 重建卡顿。
     private fun setAgcActive(active: Boolean, gainDb: Float): Boolean {
         agcActive = active
-        // 策略变了，本曲响度估计作废，重新评估（切回 auto 时不会用旧歌的上包络）。
-        resetAgcTrackEstimate()
+        // 策略变了，本曲增益状态作废，等上层重新下发预置值。
+        resetAgcGainState()
         if (active) {
             // 切到 auto：必须把 postGain 与 agcCurrentGainDb 一并归零。轻量通道不经过
             // configure，若沿用 fixed 档位（默认 +3，最高 +18）做起点，偏响歌会以
@@ -1280,22 +1270,48 @@ class MainActivity : AudioServiceActivity() {
     }
 
     /// 切歌归位：在下一首真正出声之前由 Flutter 同步 await 调用。
-    /// 把 postGain 立即写回传入起点（auto 模式固定为中性 0dB），并清掉上一首的增益、
-    /// 响度样本窗口、上包络与测量计数，让 AGC 对新歌重新开场测定并快速给足。
-    /// 这样即使上一首是轻歌被推到 +18dB，切到响歌也不会残留高增益造成开头爆音。
-    /// 关键：只写一次 postGain + 清内存状态，不碰 DynamicsProcessing / Visualizer 的创建与
-    /// release（那些都是 binder 同步调用），保证同步调用也不卡顿。
-    private fun resetAgcForTrackChange(gainDb: Float): Boolean {
-        val baseGain = gainDb.coerceIn(AGC_MIN_GAIN_DB, AGC_MAX_GAIN_DB)
-        agcCurrentGainDb = baseGain
-        resetAgcTrackEstimate()
-        lastMeasuredRmsDb = 0.0f
-        // 只写回 postGain；测量窗口从 0 重新开始，约 4~5 秒内按新歌响度给足
-        // （实测 +15dB 用时 4.8 秒；旧注释「约 3 秒」与实测不符，已订正）。
-        // fixed 模式 postGain 本就等于 gainDb，写回是幂等的，无副作用。
-        dynamicsProcessing?.let { applyMbcAndLimiter(it, baseGain) }
-        Log.d(TAG_VOLUME_NORMALIZATION, "resetAgcForTrackChange: baseGain=$baseGain agcActive=$agcActive")
+    /// 直接按整曲响度预置并锁定增益，完全跳过测量；即使上一首是轻歌被推到
+    /// +15dB，切到响歌也不会残留高增益造成开头爆音。
+    /// 关键：只写一次 postGain + 重置内存状态，不碰 DynamicsProcessing / Visualizer
+    /// 的创建与 release（那些都是 binder 同步调用），保证同步调用也不卡顿。
+    ///
+    /// [presetGainDb] 由上层按整曲响度算好（有元数据用 `/song/url` 的 `volume`
+    /// 实测值；无元数据用曲库均值先验）。[targetRmsDb] 非空时先更新目标响度，
+    /// 保证 decision = target - gain 的反推基准正确。
+    private fun resetAgcForTrackChange(
+        presetGainDb: Float,
+        targetRmsDb: Float? = null
+    ): Boolean {
+        if (targetRmsDb != null && targetRmsDb.isFinite()) {
+            agcTargetRmsDb = targetRmsDb.coerceIn(AGC_MIN_TARGET_DBFS, AGC_MAX_TARGET_DBFS)
+        }
+        val applied = applyPresetGain(presetGainDb)
+        Log.d(
+            TAG_VOLUME_NORMALIZATION,
+            "resetAgcForTrackChange: preset=$applied target=$agcTargetRmsDb agcActive=$agcActive"
+        )
         return true
+    }
+
+    /// 按整曲响度直接预置增益并锁定（续六起取代开场测定，续十二删除测定）。
+    ///
+    /// 双向归一化：gain = target - volume，可以为正（补轻歌）也可以为负（压响歌），
+    /// 下限 AGC_PRESET_MIN_GAIN_DB=-24。这样每首歌的输出响度都等于目标响度，
+    /// 切歌不再出现「这首突然大/小一截」——与网易云的听感一致。
+    private fun applyPresetGain(presetGainDb: Float): Float {
+        val preset = presetGainDb.coerceIn(AGC_PRESET_MIN_GAIN_DB, AGC_AUTO_MAX_GAIN_DB)
+        resetAgcGainState()
+        agcCurrentGainDb = preset
+        agcDesiredGainDb = preset
+        // agcDecisionDb 的语义是「本曲整体响度」，不是增益。由 target - gain 反推，
+        // 这样用户改档时 setAgcTarget 用 (新target - decision) 重算才是对的。
+        // （旧代码把它写成 preset 本身，改档后会把增益当响度算，偏轻歌改到响亮反而变 0dB。）
+        agcDecisionDb = agcTargetRmsDb - preset
+        agcLocked = true
+        agcTargetAdjusting = false
+        lastMeasuredRmsDb = 0.0f
+        dynamicsProcessing?.let { applyMbcAndLimiter(it, preset) }
+        return preset
     }
 
     private fun startLoudnessAgc(audioSessionId: Int) {
@@ -1320,8 +1336,8 @@ class MainActivity : AudioServiceActivity() {
             visualizer.enabled = true
             loudnessVisualizer = visualizer
             agcEnabled = true
-            // Visualizer 刚起（或重启），之前的观测样本无效，重新累积响度。
-            resetAgcTrackEstimate()
+            // Visualizer 常驻；整曲 RMS 累积由 consumeTrackRms 在切歌时结算，
+            // 不因 Visualizer 启停而清增益状态。
 
             // 后台线程每 400ms 轮询一次 RMS：getMeasurementPeakRms 是 binder 同步调用，
             // 放主线程会在音频繁忙时阻塞 UI（历史上多次卡顿的根因）。
@@ -1356,53 +1372,49 @@ class MainActivity : AudioServiceActivity() {
         }
     }
 
+    /// 取走并清空「上一曲」的整曲 RMS 累积（续十一）。
+    /// 由 Flutter 在切歌最早期调用：此时 currentSong 仍是旧歌，结算值可以写进它的
+    /// 响度缓存，让无元数据歌曲第二次播放就按实测值预置增益。
+    /// 返回 {rmsDb: Double?, samples: Int}，rmsDb 是线性功率域平均后转回的 dBFS。
+    private fun consumeTrackRms(): Map<String, Any?> {
+        val samples = trackRmsSamples
+        val rmsDb = if (samples > 0) {
+            10.0 * Math.log10(trackRmsPowerSum / samples)
+        } else {
+            null
+        }
+        val snapshot = mapOf<String, Any?>(
+            "rmsDb" to rmsDb,
+            "samples" to samples,
+        )
+        trackRmsPowerSum = 0.0
+        trackRmsSamples = 0
+        Log.d(
+            TAG_VOLUME_NORMALIZATION,
+            "consumeTrackRms: rmsDb=$rmsDb samples=$samples"
+        )
+        return snapshot
+    }
+
     private fun onAgcMeasuredRms(measuredDb: Float) {
-        // fixed 模式下 Visualizer 常驻但不做任何调整，只做一次布尔判断立即返回。
-        if (!agcEnabled || !agcActive) return
+        if (!agcEnabled) return
         // measuredDb 来自官方 getMeasurementPeakRms 的 mRms（mB→dBFS），是短窗瞬时电平。
         // 它只用于 UI 展示与累积响度样本，绝不直接换算成增益。
         lastMeasuredRmsDb = measuredDb
 
-        // 静音/极弱段落不参与估计（否则底噪被当作歌曲响度），也不推进测量计数。
-        // 官方测量静音下限约 -9600mB = -96dBFS，远低于 -55dBFS 阈值。
+        // 整曲响度累积：独立于 agcActive（fixed 也要采）与 agcLocked（锁定后继续采）。
+        // 静音/极弱段落不计入（否则底噪被当作歌曲响度），沿用 -55dBFS 门限。
+        if (measuredDb >= AGC_SILENCE_RMS_DB) {
+            trackRmsPowerSum += Math.pow(10.0, measuredDb.toDouble() / 10.0)
+            trackRmsSamples++
+        }
+
+        // fixed 模式下 Visualizer 常驻但不做任何增益调整，早退。
+        if (!agcActive) return
         if (measuredDb < AGC_SILENCE_RMS_DB) return
 
-        if (!agcLocked) {
-            // ---- 开场测量期（约 4.8 秒）：边测边快速给足 ----
-            agcLoudnessWindow[agcWindowIndex] = measuredDb
-            agcWindowIndex = (agcWindowIndex + 1) % AGC_DECIDE_CYCLES
-            agcWindowCount = minOf(agcWindowCount + 1, AGC_DECIDE_CYCLES)
-            agcMeasureCycles++
-
-            // 代表性响度 = 当前窗口 P80 的【只升不降上包络】。纯音乐/间奏等低电平
-            // 段落即便让窗口 P80 下降，也不能把增益抬回去——这是「歌内不突变」的
-            // 核心不变量。P80 而非最大值，避免大动态歌曲按少数尖峰系统性少补。
-            val p80 = currentLoudnessPercentile()
-            if (p80 > agcRepresentativeDb) agcRepresentativeDb = p80
-
-            // 上包络只升不降 ⇒ desired 只降不升。极轻歌曲开场 p80 低至 -40dBFS 时
-            // rawDesired 远超上限，desired 直接打满 +15dB：稳定性来自上限保护，不是
-            // P80 与增益「自然相交」（旧注释这样描述，与实测 desired=15.0 不符）。
-            agcDesiredGainDb = (agcTargetRmsDb - agcRepresentativeDb)
-                .coerceIn(AGC_MIN_GAIN_DB, AGC_AUTO_MAX_GAIN_DB)
-
-            if (agcMeasureCycles >= AGC_DECIDE_CYCLES) {
-                // 测量窗口结束：按开场代表性响度冻结增益，之后整曲不再改变。
-                agcLocked = true
-                agcDecisionDb = agcRepresentativeDb
-                Log.d(
-                    TAG_VOLUME_NORMALIZATION,
-                    "AGC track locked: desired=$agcDesiredGainDb dB " +
-                        "p80=$agcRepresentativeDb dB target=$agcTargetRmsDb dB " +
-                        "samples=$agcMeasureCycles"
-                )
-            }
-        }
-        // agcLocked 之后：desired 已冻结，不再做任何响度估计，也不再随段落调整。
-        // 仅在用户改档（setAgcTarget）时重算 desired，此处统一平滑逼近。
-
-        // 上升快（开场几秒给足）；下降平时慢（防听感突降），但用户主动改档时
-        // 临时放开到 2dB/步，避免 +15→0 要十几秒才生效（复审 P2）。
+        // desired 只由 applyPresetGain / setAgcTarget 设定，此处统一平滑逼近。
+        // 上升快、下降平时慢（防听感突降），用户主动改档时临时放开下降步长。
         val gap = agcDesiredGainDb - agcCurrentGainDb
         if (abs(gap) < 0.01f) {
             agcTargetAdjusting = false
@@ -1415,38 +1427,14 @@ class MainActivity : AudioServiceActivity() {
             maxOf(gap, -downStep)
         }
         agcCurrentGainDb = (agcCurrentGainDb + step)
-            .coerceIn(AGC_MIN_GAIN_DB, AGC_AUTO_MAX_GAIN_DB)
+            .coerceIn(AGC_PRESET_MIN_GAIN_DB, AGC_AUTO_MAX_GAIN_DB)
         if (abs(agcDesiredGainDb - agcCurrentGainDb) < 0.01f) agcTargetAdjusting = false
         dynamicsProcessing?.let { applyMbcAndLimiter(it, agcCurrentGainDb) }
         Log.d(
             TAG_VOLUME_NORMALIZATION,
             "AGC pulse: gain=${agcCurrentGainDb}dB desired=${agcDesiredGainDb}dB " +
-                "p80=${agcRepresentativeDb}dB measured=${measuredDb}dB " +
-                "target=${agcTargetRmsDb}dB cycles=$agcMeasureCycles locked=$agcLocked"
+                "measured=${measuredDb}dB target=${agcTargetRmsDb}dB locked=$agcLocked"
         )
-    }
-
-    /// 开场测量窗口内有效样本的 P80 分位（dB 域线性插值）。
-    /// 每 400ms 只排最多 12 个 float，开销可忽略；返回有限值，便于上包络比较。
-    private fun currentLoudnessPercentile(): Float {
-        if (agcWindowCount == 0) return AGC_SILENCE_RMS_DB
-        val valid = FloatArray(AGC_DECIDE_CYCLES)
-        var n = 0
-        for (i in 0 until AGC_DECIDE_CYCLES) {
-            val v = agcLoudnessWindow[i]
-            if (!v.isNaN()) {
-                valid[n] = v
-                n++
-            }
-        }
-        if (n == 0) return AGC_SILENCE_RMS_DB
-        val sorted = valid.copyOf(n)
-        java.util.Arrays.sort(sorted)
-        val pos = AGC_PERCENTILE * (n - 1).toFloat()
-        val lo = pos.toInt()
-        val hi = minOf(lo + 1, n - 1)
-        val frac = pos - lo
-        return sorted[lo] + (sorted[hi] - sorted[lo]) * frac
     }
 
     private fun stopLoudnessAgc() {
@@ -1464,7 +1452,7 @@ class MainActivity : AudioServiceActivity() {
         }
         loudnessVisualizer = null
         agcEnabled = false
-        resetAgcTrackEstimate()
+        resetAgcGainState()
     }
 
     private fun releaseDynamicsProcessing() {
@@ -1479,7 +1467,7 @@ class MainActivity : AudioServiceActivity() {
 
     private fun enqueueApkDownload(url: String, fileName: String) {
         val request = DownloadManager.Request(Uri.parse(url))
-            .setTitle("KA Music 更新包")
+            .setTitle("九九音乐 更新包")
             .setDescription("正在下载新版本")
             .setMimeType("application/vnd.android.package-archive")
             .setAllowedOverMetered(true)

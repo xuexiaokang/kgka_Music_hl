@@ -36,15 +36,114 @@ enum PlaybackMode { playlistLoop, shuffle, singleLoop }
 /// - auto：实时响度 AGC，按每首歌实际音量自动调增益（需 RECORD_AUDIO）。
 enum VolumeGainMode { fixed, auto }
 
+/// 当前曲整曲响度元数据的来源。
+///
+/// 设置页「实时增益」详情据此如实标注，不要把估算说成实测。
+enum SongLoudnessSource {
+  /// 本次 `/song/url` 实测返回 `volume`（含 `volume_peak`）。
+  url,
+
+  /// 本次没走音源（本地文件 / 缓存命中），用历史缓存里的实测值。
+  cache,
+
+  /// 上一首播放时端上 Visualizer 累计整曲 RMS 得到的值（续十一）。
+  /// 已按音源 `volume` 口径标定，精度约 ±1 dB，但不是音源下发的官方实测。
+  measured,
+
+  /// 无任何实测元数据（刚发行新歌返回哨兵值 0 / 本地文件无缓存），
+  /// 用曲库统计中位数先验兜底。
+  fallback,
+}
+
+/// 设置页「实时增益」展示用的当前曲响度元数据快照。
+///
+/// 只读、按切歌时刻采集，不驱动任何增益决策；增益的真实计算仍在
+/// [_presetGainForVolume]（本文件下方）完成。这里只是把诊断所需的
+/// 输入（音源元数据）、推导（目标 − 电平）与结果摆到 UI 上。
+class SongLoudnessMeta {
+  const SongLoudnessMeta({
+    required this.songTitle,
+    required this.artist,
+    required this.hash,
+    required this.songSource,
+    required this.source,
+    required this.volumeDb,
+    required this.volumePeakDb,
+    required this.effectiveVolumeDb,
+    required this.fallbackVolumeDb,
+    required this.targetRmsDb,
+    required this.presetGainDb,
+    this.calibrationOffsetDb = 0.0,
+    this.calibrationSamples = 0,
+    this.calibrationReady = false,
+  });
+
+  final String songTitle;
+  final String artist;
+  final String hash;
+  final SongSource songSource;
+
+  /// 整曲响度元数据的来源（实测 / 缓存 / 先验）。
+  final SongLoudnessSource source;
+
+  /// 音源实测整曲平均电平 `volume`（dBFS）；null 表示无元数据。
+  final double? volumeDb;
+
+  /// 音源实测峰值 `volume_peak`（dBFS）；仅 [SongLoudnessSource.url] 时有值。
+  /// 基准未公开（实测有正值），仅展示、不参与削波保护。
+  final double? volumePeakDb;
+
+  /// 实际用于计算增益的电平：有元数据取实测，否则取曲库先验。
+  final double effectiveVolumeDb;
+  final double fallbackVolumeDb;
+  final double targetRmsDb;
+  final double presetGainDb;
+
+  /// 端上整曲 RMS 与音源 `volume` 的口径标定偏置（全局，滑动中位数）。
+  final double calibrationOffsetDb;
+  final int calibrationSamples;
+  final bool calibrationReady;
+
+  /// 峰均比（crest）：`volume_peak − volume`。实测中位约 11.1 dB。
+  double? get crestDb => (volumeDb != null && volumePeakDb != null)
+      ? volumePeakDb! - volumeDb!
+      : null;
+
+  /// 是否只是曲库均值先验（不是任何实测值）。缓存/端上实测都有可用电平。
+  bool get isEstimate => source == SongLoudnessSource.fallback;
+
+  String get sourceLabel => switch (source) {
+        SongLoudnessSource.url => '音源实测',
+        SongLoudnessSource.cache => '历史缓存',
+        SongLoudnessSource.measured => '端上整曲实测',
+        SongLoudnessSource.fallback => '曲库均值先验',
+      };
+
+  String get songSourceLabel => switch (songSource) {
+        SongSource.kugou => '酷狗',
+        SongSource.netease => '网易云',
+        SongSource.local => '本地',
+      };
+}
+
 /// 自动增益的目标响度档位，映射到原生 DynamicsProcessing 的 targetRmsDb。
-/// 数值越接近 0 越响；-16dBFS 约等于流媒体常见响度，保留峰值余量给 limiter。
+/// 数值越接近 0 越响。
+///
+/// 2026-11-20 续九：整套档位相对续一~续八**整体 +4 dB**（原 -20/-16/-12）。
+/// 依据实车听感：原标准 -16dBFS（≈ -14 LUFS，对齐 Spotify/YouTube）在车机上
+/// 明显比网易云小，只有 -12 档（≈ -10 LUFS）才接近。国内平台归一化目标未公开、
+/// 实测行为也不统一（不少曲目不做全量归一化或目标更响），所以以实车为准。
+/// 代价：峰值余量减少 4 dB，标准档约 36% 曲目输出峰值会越过 0dBFS，由
+/// limiter（-1dBFS / attack 0.3ms）兜住而非硬削波——车机噪音环境下听感可接受。
+/// 响亮 -8 档限幅明显（约 99% 曲目），仅建议高速/极嘈杂场景使用。
+/// 注意：整体推高与「另加车机音量补偿」物理等价，不存在无损变响的方案。
 enum AutoLoudnessLevel { gentle, standard, loud }
 
 extension AutoLoudnessLevelX on AutoLoudnessLevel {
   double get targetRmsDb => switch (this) {
-    AutoLoudnessLevel.gentle => -20.0,
-    AutoLoudnessLevel.standard => -16.0,
-    AutoLoudnessLevel.loud => -12.0,
+    AutoLoudnessLevel.gentle => -16.0,
+    AutoLoudnessLevel.standard => -12.0,
+    AutoLoudnessLevel.loud => -8.0,
   };
 
   String get label => switch (this) {
@@ -222,6 +321,49 @@ class PlayerController extends ChangeNotifier {
   static const _volumeGainDbSettingKey = 'settings.volume_gain_db';
   static const _volumeGainModeSettingKey = 'settings.volume_gain_mode';
   static const _autoLoudnessLevelSettingKey = 'settings.auto_loudness_level';
+
+  /// 音源整曲响度缓存：song.hash → `volume`（dBFS）。
+  ///
+  /// 音源 `/song/url` 每次播放都会下发 `volume`，但缓存播放/本地文件不会走该
+  /// 接口，因此把拿到过的值落盘，下次即使命中本地文件也能直接预置增益。
+  static const _songLoudnessCacheKey = 'settings.song_loudness_cache';
+
+  /// auto 模式增益上限，必须与原生 `AGC_AUTO_MAX_GAIN_DB` 保持一致。
+  static const _agcAutoMaxGainDb = 15.0;
+
+  /// auto 模式预置增益的下限（允许衰减），必须与原生 `AGC_PRESET_MIN_GAIN_DB`
+  /// 保持一致。偏响的歌靠负增益压到目标响度，做到所有歌同一响度。
+  static const _agcPresetMinGainDb = 24.0;
+
+  /// 无整曲响度元数据时使用的先验电平（dBFS）。
+  ///
+  /// 来源：2026-11-20 对 music.api.hoilai.cn 在线曲库做 100 首随机抽样
+  /// （中文歌为主），`volume` 中位数 -10.70、均值 -11.15、sd 2.67。
+  /// 取中位数而非均值，避免少数极轻曲目（最小 -25.2）拉偏。
+  /// 用于刚发行新歌（`volume=0` 哨兵值）、本地文件、缓存播放等场景，
+  /// 让开场就有一个合理电平，且整曲不跳变。
+  static const _fallbackSongVolumeDb = -10.7;
+
+  // ---- 续十一：端上整曲实测 + 口径标定 ----
+  /// 响度缓存里每个 hash 的来源（音源官方 / 端上实测）。
+  /// 旧版本没有这张表：缺失一律视为 url，因为那时缓存只来自 `/song/url`。
+  static const _songLoudnessSourceCacheKey = 'settings.song_loudness_sources';
+
+  /// 标定样本：每首「有音源 volume + 端上整曲 RMS」的歌记一个差值。
+  static const _loudnessCalibrationDeltasKey =
+      'settings.loudness_calibration_deltas';
+  static const _maxCalibrationSamples = 20;
+
+  /// 有效采样门槛：非静音 400ms 样本数对应的秒数，且必须覆盖几乎整曲。
+  /// MuMu 实证：18 秒片段的 `volume − 端上 rms` 在 +3.5 ~ +14 dB 之间乱跳
+  /// （不同歌开场段落响度差异极大），比曲库先验 ±2.7 dB 还差，所以只接受
+  /// 基本播完的结算值；曲长未知时一律不结算，宁可继续用先验。
+  static const _trackRmsMinSeconds = 60.0;
+  static const _trackRmsMinDurationRatio = 0.85;
+
+  /// 音源对新歌是小时~天级异步批处理，同一首歌 30 分钟内不重复补拉。
+  static const Duration _loudnessWarmRetryInterval = Duration(minutes: 30);
+
   static const _bluetoothLyricsEnabledSettingKey =
       'settings.bluetooth_lyrics_enabled';
   static const _keepScreenOnSettingKey = 'settings.keep_screen_on';
@@ -363,7 +505,7 @@ class PlayerController extends ChangeNotifier {
     _playerErrorSub = audioPlayer.errorStream.listen((err) {
       // 播放期错误（多为网络中断 / 流地址过期）→ 走自动恢复，而非直接卡停。
       debugPrint(
-        '[KA Music][player] errorStream: code=${err.code} ${err.message}',
+        '[九九音乐][player] errorStream: code=${err.code} ${err.message}',
       );
       unawaited(_scheduleRecovery(reason: 'player-error'));
     });
@@ -557,11 +699,41 @@ class PlayerController extends ChangeNotifier {
   /// auto 需要 RECORD_AUDIO 权限；拒绝时自动回退 fixed 并[notifyListeners]。
   VolumeGainMode volumeGainMode = VolumeGainMode.auto;
 
-  /// 自动增益的目标响度档位。默认标准（-16dBFS）。
+  /// 自动增益的目标响度档位。默认标准（-12dBFS，续九整体 +4 dB 后）。
   AutoLoudnessLevel autoLoudnessLevel = AutoLoudnessLevel.standard;
 
   /// 实时 AGC 的最新快照，供设置页展示；auto 模式且原生支持时非空。
   AgcStatus? agcStatus;
+
+  /// 整曲响度缓存（song.hash → volume dBFS）。
+  /// 来源有两类：音源 `/song/url` 官方实测、端上 Visualizer 整曲累计（续十一）。
+  final Map<String, double> _songLoudnessCache = <String, double>{};
+
+  /// 每个缓存值的来源，与 [_songLoudnessCache] 同键；缺失按 url 处理（旧数据兼容）。
+  final Map<String, SongLoudnessSource> _songLoudnessSourceCache =
+      <String, SongLoudnessSource>{};
+
+  /// 口径标定样本（`volume` − 端上整曲 RMS），取滑动中位数得到全局偏置。
+  /// 音源统计口径未公开且可能调整，用自适应标定比写死常量可靠。
+  final List<double> _calibrationDeltas = <double>[];
+
+  /// 补拉响度元数据的退避时间戳（hash → 上次请求时间），仅内存、不持久化。
+  final Map<String, DateTime> _loudnessWarmLastAttempt = <String, DateTime>{};
+
+  /// 最近一次切歌结算出来的整曲 RMS（供设置页诊断展示）。
+  double? lastTrackRmsDb;
+  int lastTrackRmsSamples = 0;
+
+  /// 当前曲的整曲响度（来自音源或缓存）；为空表示无元数据、用曲库先验。
+  double? _currentSongVolumeDb;
+
+  /// 当前曲的峰值电平 `volume_peak`（仅本次 `/song/url` 实测时有值）。
+  /// 只用于设置页元数据展示，不参与增益计算（基准未公开）。
+  double? _currentSongVolumePeakDb;
+
+  /// 当前曲整曲响度的来源，供设置页如实标注「实测 / 缓存 / 先验」。
+  SongLoudnessSource _currentSongLoudnessSource =
+      SongLoudnessSource.fallback;
 
   /// 麦克风权限缓存：进程内已授予就不再重复 platform channel 往返，
   /// 避免每次切到 auto 都 await 权限查询造成菜单卡顿。被拒存 false，下次仍会重试申请。
@@ -781,8 +953,10 @@ class PlayerController extends ChangeNotifier {
     final intentSerial = _playbackIntentSerial;
     _pendingPlaybackIntent = intentSerial;
     final requestSerial = ++_playRequestSerial;
+    // 续十一：切歌前结算上一曲的端上整曲 RMS（此时 currentSong 仍是旧歌）。
+    await _settlePreviousTrackRms();
     debugPrint(
-      '[KA Music][playback] request=$requestSerial begin '
+      '[九九音乐][playback] request=$requestSerial begin '
       'incomingQueue=${queue?.length ?? 0}',
     );
     final isPlayingWithinCurrentQueue =
@@ -866,27 +1040,31 @@ class PlayerController extends ChangeNotifier {
     try {
       String url;
       String? networkUrl;
+      PlayUrl? resolvedPlayUrl;
       debugPrint(
-        '[KA Music][playback] request=$requestSerial local-lookup begin',
+        '[九九音乐][playback] request=$requestSerial local-lookup begin',
       );
       final local = await downloadController?.localPathFor(song, audioQuality);
       if (requestSerial != _playRequestSerial) return;
       debugPrint(
-        '[KA Music][playback] request=$requestSerial local-lookup complete '
+        '[九九音乐][playback] request=$requestSerial local-lookup complete '
         'found=${local != null}',
       );
       if (local != null) {
         url = local;
+        // 已下载/已缓存：顺手补一次整曲响度，下次播放即可直接预置。
+        unawaited(_warmLoudnessMetadata(song));
       } else if (song.source == SongSource.local) {
         url = song.id;
       } else {
         debugPrint(
-          '[KA Music][playback] request=$requestSerial url-resolve begin',
+          '[九九音乐][playback] request=$requestSerial url-resolve begin',
         );
         final playUrl = await _resolvePlayUrl(song);
+        resolvedPlayUrl = playUrl;
         if (requestSerial != _playRequestSerial) return;
         debugPrint(
-          '[KA Music][playback] request=$requestSerial url-resolve complete '
+          '[九九音乐][playback] request=$requestSerial url-resolve complete '
           'empty=${playUrl.url.isEmpty}',
         );
         if (playUrl.url.isEmpty) {
@@ -906,12 +1084,12 @@ class PlayerController extends ChangeNotifier {
       // setUrl/setAudioSource 不能并发执行。快速点击“下一曲”时，让已经开始的
       // 音源切换先安全结束，再由最后一次请求接管，避免旧请求反向覆盖新歌曲。
       debugPrint(
-        '[KA Music][playback] request=$requestSerial source-queue enter',
+        '[九九音乐][playback] request=$requestSerial source-queue enter',
       );
       await _serializeSourceChange(() async {
         if (requestSerial != _playRequestSerial) return;
         debugPrint(
-          '[KA Music][playback] request=$requestSerial source-load begin',
+          '[九九音乐][playback] request=$requestSerial source-load begin',
         );
         await _audioHandler.loadSong(
           song: song,
@@ -921,7 +1099,7 @@ class PlayerController extends ChangeNotifier {
         );
         if (requestSerial != _playRequestSerial) return;
         debugPrint(
-          '[KA Music][playback] request=$requestSerial source-loaded '
+          '[九九音乐][playback] request=$requestSerial source-loaded '
           'local=${networkUrl == null}',
         );
 
@@ -931,22 +1109,22 @@ class PlayerController extends ChangeNotifier {
         if (wasPlaying) {
           unawaited(audioPlayer.setVolume(1.0));
         }
-        // 切歌归位：新歌真正出声前，把 AGC 增益从上一首的收敛值同步打回中性 0dB，
-        // 消除「轻歌被推高增益 → 切到响歌开头爆音」的竞态窗口。必须 await 完成再 play。
-        // 归位到 0（而非固定增益档）：auto 模式从零起步，响歌往下减、轻歌往上加，
-        // 避免响歌一上来被固定档放大、AGC 再一路狂减造成「减了非常多增益」的观感。
-        // 只在 auto 模式有意义（fixed 模式 postGain 本就是固定档位，不归位）。
-        if (volumeNormalizationEnabled &&
-            volumeGainMode == VolumeGainMode.auto) {
-          await _audioEffects.resetAgcForTrackChange(gainDb: 0);
-        }
+        // 切歌归位 + 预置增益：新歌真正出声前确定增益并写进 postGain。
+        // 有元数据按音源整曲响度（`volume`）算、无元数据按曲库均值先验算，
+        // 两种情况都直接锁定，整曲不变。续十二已删除开场 4.8 秒测定路径。
+        // 必须 await 完成再 play，避免上一首的高增益被带过来造成开头爆音。
+        _captureSongLoudnessMeta(song, resolvedPlayUrl);
+        // 音源未给实测值时后台等它补齐（新歌批处理常要数小时~一天），
+        // 补上后自动升级为官方值；内部有 30 分钟退避，不会每次切歌都打接口。
+        unawaited(_warmLoudnessMetadata(song));
+        await _applyPresetGainForCurrentSong();
         await _startPlayback(expectedIntent: intentSerial);
         if (requestSerial != _playRequestSerial) return;
         unawaited(_applyVolumeNormalization());
         unawaited(_applyEqualizer());
         unawaited(_applyBassBoost());
         debugPrint(
-          '[KA Music][playback] request=$requestSerial started '
+          '[九九音乐][playback] request=$requestSerial started '
           'playing=${audioPlayer.playing} '
           'state=${audioPlayer.processingState.name}',
         );
@@ -961,7 +1139,7 @@ class PlayerController extends ChangeNotifier {
       });
     } catch (error) {
       if (requestSerial != _playRequestSerial) return;
-      debugPrint('[KA Music][playback] request=$requestSerial failed: $error');
+      debugPrint('[九九音乐][playback] request=$requestSerial failed: $error');
       errorMessage = error.toString();
       unawaited(_audioHandler.pause());
       if (wasPlaying) {
@@ -1005,6 +1183,12 @@ class PlayerController extends ChangeNotifier {
         (_interruptionRequiresPause &&
             audioInterruptionEnabled &&
             !allowDuringInterruption)) {
+      debugPrint(
+        '[九九音乐][playback] start blocked: intent=$expectedIntent/'
+        '$_playbackIntentSerial disconnect=$_resumeBlockedByDisconnect '
+        'interruption=$_interruptionRequiresPause '
+        'allowDuringInterruption=$allowDuringInterruption',
+      );
       return;
     }
     // User intent is recorded at the public entry point, before any network or
@@ -1101,7 +1285,34 @@ class PlayerController extends ChangeNotifier {
   /// - 网易云歌曲使用外链地址
   /// - 其它歌曲走 [MusicApi.songUrl]，开启智能音质时在网络请求失败
   ///   或返回空地址时自动降级重试（lossless -> high -> standard）。
+  ///
+  /// 顺带把音源下发的整曲响度（`volume`）写进缓存：预加载阶段就能拿到，
+  /// 之后即便命中本地缓存文件、不再请求 `/song/url`，也能直接预置增益。
   Future<PlayUrl> _resolvePlayUrl(Song song) async {
+    final playUrl = await _resolvePlayUrlInner(song);
+    // 本次已经向音源要过地址（无论 volume 是否补齐），30 分钟内不再重复补拉。
+    _loudnessWarmLastAttempt[song.hash] = DateTime.now();
+    final volume = validLoudnessDb(playUrl.volumeDb);
+    if (volume != null) {
+      _rememberSongLoudness(song.hash, volume, SongLoudnessSource.url);
+    }
+    debugPrint(
+      '[九九音乐][playback] loudness hash=${song.hash} '
+      'source=${_playUrlLoudnessSource(song, playUrl)} '
+      'cached=${_songLoudnessCache[song.hash]}',
+    );
+    return playUrl;
+  }
+
+  /// 仅用于日志：本次响度来自音源还是历史缓存。
+  String _playUrlLoudnessSource(Song song, PlayUrl playUrl) {
+    final fresh = playUrl.volumeDb;
+    if (fresh != null) return 'url:${fresh.toStringAsFixed(1)}';
+    final cached = _songLoudnessCache[song.hash];
+    return cached == null ? 'none' : 'cache:${cached.toStringAsFixed(1)}';
+  }
+
+  Future<PlayUrl> _resolvePlayUrlInner(Song song) async {
     if (song.source == SongSource.local) {
       return PlayUrl(url: song.id, hash: song.hash);
     }
@@ -1146,7 +1357,7 @@ class PlayerController extends ChangeNotifier {
         );
         if (retryUrl.url.isNotEmpty) {
           debugPrint(
-            '[KA Music][smart-quality] ${audioQuality.badge} 失败，'
+            '[九九音乐][smart-quality] ${audioQuality.badge} 失败，'
             '已降级为 ${fallback.badge}',
           );
           return retryUrl;
@@ -1215,7 +1426,7 @@ class PlayerController extends ChangeNotifier {
     if (!wasWaiting) {
       _recoveryAttempts++;
       if (_recoveryAttempts > _maxRecoveryAttempts) {
-        debugPrint('[KA Music][recover] 恢复尝试超上限，跳到下一首');
+        debugPrint('[九九音乐][recover] 恢复尝试超上限，跳到下一首');
         _resetRecovery();
         unawaited(next());
         return;
@@ -1225,7 +1436,7 @@ class PlayerController extends ChangeNotifier {
     _recovering = true;
     _stallWatchdogTimer?.cancel();
     debugPrint(
-      '[KA Music][recover] 尝试恢复 原因=$reason 计数=$_recoveryAttempts '
+      '[九九音乐][recover] 尝试恢复 原因=$reason 计数=$_recoveryAttempts '
       '等待网络=$_waitingForNetwork smart=$smartQualityEnabled',
     );
     try {
@@ -1261,7 +1472,7 @@ class PlayerController extends ChangeNotifier {
     _recoveryAttempts = 0; // 网络等待不占用跳歌预算
     errorMessage = '网络已中断，等待恢复后将自动继续播放';
     notifyListeners();
-    debugPrint('[KA Music][recover] 检测到网络中断，进入等待网络恢复状态');
+    debugPrint('[九九音乐][recover] 检测到网络中断，进入等待网络恢复状态');
     _recoveryRetryTimer?.cancel();
     _recoveryRetryTimer = Timer(_networkPollInterval, () {
       unawaited(_scheduleRecovery(reason: 'network-poll'));
@@ -1546,6 +1757,12 @@ class PlayerController extends ChangeNotifier {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_volumeNormalizationEnabledSettingKey, enabled);
     final autoOk = await _applyVolumeNormalization();
+    if (enabled && autoOk) {
+      // 播放中打开开关：configure 会把增益归零。按整曲响度（或曲库均值先验）
+      // 立即下发预置并锁定，一开就准。
+      await _applyPresetGainForCurrentSong();
+      await refreshAgcStatus();
+    }
     notifyListeners();
     return autoOk;
   }
@@ -1614,6 +1831,9 @@ class PlayerController extends ChangeNotifier {
             gainDb: volumeGainDb,
           );
           if (mode == VolumeGainMode.auto) {
+            // 从 fixed 切回 auto 时原生会把 postGain 归零并清掉锁定状态：
+            // 按整曲响度（或曲库均值先验）立即重新预置并锁定。
+            await _applyPresetGainForCurrentSong();
             await refreshAgcStatus();
           }
         }
@@ -1637,7 +1857,9 @@ class PlayerController extends ChangeNotifier {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString(_autoLoudnessLevelSettingKey, level.name);
       if (volumeNormalizationEnabled && volumeGainMode == VolumeGainMode.auto) {
-        await _audioEffects.setAgcTarget(level.targetRmsDb);
+        // 有整曲响度按实测重算、无元数据按曲库均值先验重算，两种情况都
+        // 直接锁定，改档瞬间生效（不需要等 AGC 慢降追上）。
+        await _applyPresetGainForCurrentSong();
         await refreshAgcStatus();
       }
       notifyListeners();
@@ -1946,7 +2168,12 @@ class PlayerController extends ChangeNotifier {
       if (audioPlayer.processingState == ProcessingState.completed) {
         await _audioHandler.seek(Duration.zero);
       }
-      await _startPlayback(expectedIntent: intentSerial);
+      // 用户主动点播放属于新的播放意图：即使此刻系统焦点事件尚未回 end，
+      // 也应尝试重新夺取焦点，而不是被打断守卫静默吞掉。
+      await _startPlayback(
+        expectedIntent: intentSerial,
+        allowDuringInterruption: true,
+      );
     }
   }
 
@@ -2372,6 +2599,13 @@ class PlayerController extends ChangeNotifier {
   void _handleManualPlay() {
     _cancelAutomaticResume();
     _resumeBlockedByDisconnect = false;
+    // 打断事件只收到 begin、没有 end 时（例如对方 App 抢焦点后未 abandon，
+    // 或切后台期间 end 丢失），这两个标志会一直为真，_startPlayback 会
+    // 静默拒绝一切起播——表现为“切回来点播放没反应”。用户主动播放就是
+    // 明确要求重新夺取音频焦点，必须清掉过期的打断态。
+    // 正在加载中的旧请求不受影响：若此刻真的发生新打断，begin 会再次置位。
+    _isAudioInterrupted = false;
+    _interruptionRequiresPause = false;
     _restoreDuckedVolume();
   }
 
@@ -2993,6 +3227,57 @@ class PlayerController extends ChangeNotifier {
         orElse: () => AutoLoudnessLevel.standard,
       );
     }
+    // 整曲响度缓存：音源 `/song/url` 拿到的 `volume`，用于下一次开场即精确给足。
+    final loudnessRaw = prefs.getString(_songLoudnessCacheKey);
+    if (loudnessRaw != null && loudnessRaw.isNotEmpty) {
+      try {
+        final map = jsonDecode(loudnessRaw);
+        if (map is Map) {
+          map.forEach((key, value) {
+            // 旧版本曾把哨兵值 0 写进缓存，读取时一并过滤。
+            final volume = validLoudnessDb(value is num ? value.toDouble() : null);
+            if (volume != null) {
+              _songLoudnessCache[key.toString()] = volume;
+            }
+          });
+        }
+      } catch (_) {}
+    }
+    // 缓存来源表（续十一）：旧版本没有这张表，缺失一律视为音源实测
+    // （那时缓存只可能来自 /song/url）。端上实测值要如实标注为 measured。
+    final sourceRaw = prefs.getString(_songLoudnessSourceCacheKey);
+    if (sourceRaw != null && sourceRaw.isNotEmpty) {
+      try {
+        final map = jsonDecode(sourceRaw);
+        if (map is Map) {
+          map.forEach((key, value) {
+            _songLoudnessSourceCache[key.toString()] =
+                SongLoudnessSource.values.firstWhere(
+              (e) => e.name == value,
+              orElse: () => SongLoudnessSource.url,
+            );
+          });
+        }
+      } catch (_) {}
+    }
+    // 口径标定样本：冷启动后立即有可用偏置，不必等重新攒够 3 首。
+    final calibrationRaw = prefs.getString(_loudnessCalibrationDeltasKey);
+    if (calibrationRaw != null && calibrationRaw.isNotEmpty) {
+      try {
+        final list = jsonDecode(calibrationRaw);
+        if (list is List) {
+          _calibrationDeltas.addAll(
+            list.whereType<num>().map((e) => e.toDouble()),
+          );
+          if (_calibrationDeltas.length > _maxCalibrationSamples) {
+            _calibrationDeltas.removeRange(
+              0,
+              _calibrationDeltas.length - _maxCalibrationSamples,
+            );
+          }
+        }
+      } catch (_) {}
+    }
     bluetoothLyricsEnabled =
         prefs.getBool(_bluetoothLyricsEnabledSettingKey) ??
         bluetoothLyricsEnabled;
@@ -3155,6 +3440,322 @@ class PlayerController extends ChangeNotifier {
     return !downgraded;
   }
 
+  /// 记录音源下发的整曲响度（song.hash → volume），并异步落盘。
+  ///
+  /// 音源 `/song/url` 的 `volume` 是整曲平均电平，实测 12/12 覆盖
+  /// （-16.4 ~ -4.7dBFS），比开场短窗样本可靠得多：长低音前奏的歌
+  /// （如《是否我真的一无所有》前奏 P80=-40.96、整曲 volume=-11.8）用开场
+  /// 样本会误判成偏小声并打满 +15dB，用整曲响度算则应为 0dB。
+  /// 缓存条目的可信度：音源官方 > 端上整曲实测 > 历史缓存 / 先验。
+  static int _sourceRank(SongLoudnessSource s) => switch (s) {
+        SongLoudnessSource.url => 3,
+        SongLoudnessSource.measured => 2,
+        SongLoudnessSource.cache => 1,
+        SongLoudnessSource.fallback => 0,
+      };
+
+  void _rememberSongLoudness(
+    String hash,
+    double volumeDb, [
+    SongLoudnessSource source = SongLoudnessSource.url,
+  ]) {
+    // volume=0 是「音源尚未测出响度」的哨兵值（实测全为近三天发行的新歌），
+    // 绝不能写进缓存，否则下次播放仍会被当成 0 dBFS 算出超大负增益。
+    if (hash.isEmpty || validLoudnessDb(volumeDb) == null) return;
+    final previous = _songLoudnessCache[hash];
+    final previousSource =
+        _songLoudnessSourceCache[hash] ?? SongLoudnessSource.url;
+    // 值相同且新来源不比现有更权威时不必写盘；值变了或来源升级（端上→音源）才写。
+    if (previous != null &&
+        (previous - volumeDb).abs() < 0.05 &&
+        _sourceRank(source) <= _sourceRank(previousSource)) {
+      return;
+    }
+    _songLoudnessCache[hash] = volumeDb;
+    _songLoudnessSourceCache[hash] = source;
+    // 控制缓存规模：长期使用后按插入顺序淘汰最早的一半，避免无限膨胀。
+    if (_songLoudnessCache.length > 800) {
+      for (final key in _songLoudnessCache.keys.take(400).toList()) {
+        _songLoudnessCache.remove(key);
+        _songLoudnessSourceCache.remove(key);
+      }
+    }
+    unawaited(() async {
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setString(
+          _songLoudnessCacheKey,
+          jsonEncode(_songLoudnessCache),
+        );
+        await prefs.setString(
+          _songLoudnessSourceCacheKey,
+          jsonEncode(_songLoudnessSourceCache.map(
+            (k, v) => MapEntry(k, v.name),
+          )),
+        );
+      } catch (_) {
+        // 缓存写失败只影响下次能否预置，不影响本次播放。
+      }
+    }());
+  }
+
+  /// 记一个口径标定样本：`volume`（音源官方）− 端上整曲 RMS。
+  void _recordCalibrationDelta(double delta) {
+    if (!delta.isFinite || delta.abs() > 20) return;
+    _calibrationDeltas.add(delta);
+    if (_calibrationDeltas.length > _maxCalibrationSamples) {
+      _calibrationDeltas.removeAt(0);
+    }
+    unawaited(() async {
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setString(
+          _loudnessCalibrationDeltasKey,
+          jsonEncode(_calibrationDeltas),
+        );
+      } catch (_) {
+        // 标定样本写失败只影响自适应偏置，不影响本次播放。
+      }
+    }());
+  }
+
+  /// 切歌前结算上一曲的端上整曲 RMS（续十一）。
+  ///
+  /// 调用时机必须是 `playSong` 最开头：此时 `currentSong` 仍是旧歌、
+  /// `duration` 仍是旧曲时长，结算值才能写进正确的 hash。原生累积独立于
+  /// agcActive / agcLocked，锁定后与 fixed 模式都继续采样，所以覆盖整曲。
+  ///
+  /// 两条用途：
+  /// 1) 该曲有音源实测 `volume` → 记 `volume − rms` 做口径标定；
+  /// 2) 该曲完全没有元数据 → 用 `rms + 标定偏置` 估算并写缓存，
+  ///    下次播放就能按实测预置，不再依赖曲库先验。
+  Future<void> _settlePreviousTrackRms() async {
+    final song = currentSong;
+    if (song == null || song.hash.isEmpty || !isAudioEffectsSupported) return;
+    final result = await _audioEffects.consumeTrackRms();
+    if (result == null || !result.hasData) return;
+    final rms = result.rmsDb!;
+    lastTrackRmsDb = rms;
+    lastTrackRmsSamples = result.samples;
+
+    final effectiveSec = result.effectiveSeconds;
+    final durationSec = duration.inMilliseconds / 1000.0;
+    // 短窗口实测不可靠（见 _trackRmsMinDurationRatio 注释）：曲长未知或没播到
+    // 85% 就丢弃，绝不把半首歌的偏值写进缓存。
+    if (durationSec <= 0) return;
+    if (effectiveSec < _trackRmsMinSeconds) return;
+    if (effectiveSec < durationSec * _trackRmsMinDurationRatio) return;
+
+    // 只要本曲电平来自音源官方（本次实测，或缓存里标注 url 的值）就能用于标定；
+    // 端上实测缓存不再重复标定，否则 delta≈0 会把中位数稀释掉。
+    // 实测多数重播会走 cache 而非 url，只认本次实测会让标定长期攒不够样本。
+    final known = validLoudnessDb(_currentSongVolumeDb);
+    final cachedSource = _songLoudnessSourceCache[song.hash];
+    final sourceIsUrl = _currentSongLoudnessSource == SongLoudnessSource.url ||
+        cachedSource == SongLoudnessSource.url ||
+        (cachedSource == null && known != null); // 旧数据无来源表，按 url 兼容
+    if (known != null && sourceIsUrl) {
+      final delta = known - rms;
+      _recordCalibrationDelta(delta);
+      debugPrint(
+        '[九九音乐][playback] loudness calibration delta=${delta.toStringAsFixed(2)} '
+        'url=${known.toStringAsFixed(1)} deviceRms=${rms.toStringAsFixed(1)} '
+        'samples=${result.samples} offset=${calibrationOffsetDb.toStringAsFixed(2)}',
+      );
+    } else if (known == null) {
+      // 没有可信标定时不要写：此时 offset=0，端上读数与音源口径差十几 dB，
+      // 写进去会让下次播放被推高十几 dB，比继续用曲库先验糟得多。
+      if (!calibrationReady) {
+        debugPrint(
+          '[九九音乐][playback] loudness calibration not ready '
+          'n=${_calibrationDeltas.length} -> keep library prior',
+        );
+        return;
+      }
+      final estimate = validLoudnessDb(rms + calibrationOffsetDb);
+      if (estimate != null) {
+        _rememberSongLoudness(song.hash, estimate, SongLoudnessSource.measured);
+        debugPrint(
+          '[九九音乐][playback] loudness cached from device rms=${rms.toStringAsFixed(1)} '
+          'offset=${calibrationOffsetDb.toStringAsFixed(2)} '
+          'estimate=${estimate.toStringAsFixed(1)} samples=${result.samples}',
+        );
+      }
+    }
+  }
+
+  /// 本地命中（已下载 / 已缓存）时补拉一次音源响度元数据。
+  ///
+  /// 这类歌曲不走 `/song/url`，拿不到 `volume`，只能用曲库均值先验（准确度
+  /// 不如实测）。这里只用返回的 `volume`，**不替换播放地址**，也不在歌内改动
+  /// 增益（避免中途跳变），只为让这首歌下一次播放能直接精确预置。
+  Future<void> _warmLoudnessMetadata(Song song) async {
+    if (song.source != SongSource.kugou || song.isCloudDrive) return;
+    if (song.hash.isEmpty) return;
+    // 已有音源官方实测值就无需再等；端上实测 / 无缓存的歌才需要补拉，
+    // 音源补齐后会自动覆盖为 url 来源（见 _rememberSongLoudness 的来源优先级）。
+    final cachedSource = _songLoudnessSourceCache[song.hash];
+    if (cachedSource == SongLoudnessSource.url) return;
+    // 音源对新歌是小时~天级异步批处理，同一首歌 30 分钟内不重复请求。
+    final last = _loudnessWarmLastAttempt[song.hash];
+    final now = DateTime.now();
+    if (last != null && now.difference(last) < _loudnessWarmRetryInterval) {
+      return;
+    }
+    _loudnessWarmLastAttempt[song.hash] = now;
+    try {
+      final playUrl = await _api.songUrl(
+        song,
+        quality: audioQuality,
+        hashOnly: _isPersonalFmActive,
+      );
+      final volume = validLoudnessDb(playUrl.volumeDb);
+      if (volume != null) {
+        _rememberSongLoudness(song.hash, volume, SongLoudnessSource.url);
+        debugPrint(
+          '[九九音乐][playback] loudness warmed hash=${song.hash} '
+          'url:${volume.toStringAsFixed(1)}',
+        );
+      }
+    } catch (_) {
+      // 补拉失败不影响播放，下次播放会再试。
+    }
+  }
+
+  /// 本曲整曲响度：优先用本次音源返回，其次用历史缓存。
+  double? _songVolumeDb(Song song, PlayUrl? playUrl) {
+    final fresh = validLoudnessDb(playUrl?.volumeDb);
+    if (fresh != null) return fresh;
+    return validLoudnessDb(_songLoudnessCache[song.hash]);
+  }
+
+  /// 切歌时采集当前曲的响度元数据快照（UI 展示用，不影响增益决策）。
+  ///
+  /// 与 [_songVolumeDb] 用同一套优先级：本次音源实测 > 历史缓存 > 无元数据。
+  /// 同时记录 `volume_peak` 与来源，让设置页能区分「实测」和「曲库均值先验」。
+  /// 两处调用点：正常切歌（playSong）与冷启动恢复（prepareRestoredSong）。
+  void _captureSongLoudnessMeta(Song song, PlayUrl? playUrl) {
+    final fresh = validLoudnessDb(playUrl?.volumeDb);
+    _currentSongVolumeDb = _songVolumeDb(song, playUrl);
+    if (fresh != null) {
+      _currentSongVolumePeakDb = playUrl?.volumePeakDb;
+      _currentSongLoudnessSource = SongLoudnessSource.url;
+    } else if (_currentSongVolumeDb != null) {
+      // 缓存里只有 volume，没有 peak。区分缓存值究竟来自音源还是端上整曲实测。
+      _currentSongVolumePeakDb = null;
+      final cached =
+          _songLoudnessSourceCache[song.hash] ?? SongLoudnessSource.url;
+      _currentSongLoudnessSource = cached == SongLoudnessSource.measured
+          ? SongLoudnessSource.measured
+          : SongLoudnessSource.cache;
+    } else {
+      _currentSongVolumePeakDb = null;
+      _currentSongLoudnessSource = SongLoudnessSource.fallback;
+    }
+    debugPrint(
+      '[九九音乐][playback] loudness meta '
+      'source=${_currentSongLoudnessSource.name} '
+      'volume=${_currentSongVolumeDb?.toStringAsFixed(1) ?? "none"} '
+      'peak=${_currentSongVolumePeakDb?.toStringAsFixed(1) ?? "none"} '
+      'hash=${song.hash} title=${song.title}',
+    );
+  }
+
+  /// 设置页「实时增益」读取的当前曲响度元数据快照。
+  ///
+  /// [presetGainDb] 与 [effectiveVolumeDb] 直接复用增益链路的计算，保证 UI
+  /// 上显示的推导和真正下发给原生的值完全一致（改档后也会即时反映）。
+  SongLoudnessMeta get currentSongLoudnessMeta {
+    final song = currentSong;
+    final volume = validLoudnessDb(_currentSongVolumeDb);
+    final target = autoLoudnessLevel.targetRmsDb;
+    return SongLoudnessMeta(
+      songTitle: song?.title ?? '—',
+      artist: song?.artist ?? '—',
+      hash: song?.hash ?? '',
+      songSource: song?.source ?? SongSource.kugou,
+      source: _currentSongLoudnessSource,
+      volumeDb: volume,
+      volumePeakDb: _currentSongVolumePeakDb,
+      effectiveVolumeDb: volume ?? _fallbackSongVolumeDb,
+      fallbackVolumeDb: _fallbackSongVolumeDb,
+      targetRmsDb: target,
+      presetGainDb: _presetGainForVolume(volume),
+      calibrationOffsetDb: calibrationOffsetDb,
+      calibrationSamples: calibrationSamples,
+      calibrationReady: calibrationReady,
+    );
+  }
+
+  /// 按整曲响度算预置增益：双向归一化 [−24,+15]，上限/下限与原生一致。
+  /// 偏轻的歌补上来、偏响的歌压下去，所有歌都落在同一个目标响度上。
+  ///
+  /// 无元数据（本地文件、缓存播放、音源返回哨兵值 0 的新歌）时改用曲库
+  /// 统计先验 [_fallbackSongVolumeDb] 反推一个中性增益并直接锁定：开场
+  /// 就有合理电平，且整曲不跳变。续十二已删除开场测定回退路径。
+  double _presetGainForVolume(double? volumeDb) {
+    final effective = validLoudnessDb(volumeDb) ?? _fallbackSongVolumeDb;
+    return (autoLoudnessLevel.targetRmsDb - effective)
+        .clamp(-_agcPresetMinGainDb, _agcAutoMaxGainDb);
+  }
+
+  /// 端上整曲 RMS → 音源 `volume` 口径的标定偏置（dB）。
+  ///
+  /// 样本少于 3 首时返回 0，避免单首异常值把偏置带偏；之后取滑动中位数，
+  /// 对个别脏数据（不同母带、音源口径波动）比均值稳健。
+  double get calibrationOffsetDb {
+    if (_calibrationDeltas.length < 3) return 0.0;
+    final sorted = List<double>.from(_calibrationDeltas)..sort();
+    final mid = sorted.length ~/ 2;
+    return sorted.length.isOdd
+        ? sorted[mid]
+        : (sorted[mid - 1] + sorted[mid]) / 2;
+  }
+
+  int get calibrationSamples => _calibrationDeltas.length;
+
+  /// 标定偏置是否可信：至少 3 个样本，且离散度（MAD）不超过 2.5 dB。
+  /// 不可信时端上实测缓存一律不写——offset 还是 0 会把估算值整体带偏十几 dB。
+  bool get calibrationReady {
+    if (_calibrationDeltas.length < 3) return false;
+    final sorted = List<double>.from(_calibrationDeltas)..sort();
+    final mid = sorted.length ~/ 2;
+    final median = sorted.length.isOdd
+        ? sorted[mid]
+        : (sorted[mid - 1] + sorted[mid]) / 2;
+    final deviations = sorted.map((d) => (d - median).abs()).toList()..sort();
+    return deviations[deviations.length ~/ 2] <= 2.5;
+  }
+
+  /// 当前曲的预置增益是否来自「曲库均值先验」而非任何实测值。
+  /// 设置页据此如实区分状态文案，避免把估算说成实测。
+  bool get presetGainIsEstimate =>
+      validLoudnessDb(_currentSongVolumeDb) == null;
+
+  /// 用当前曲的整曲响度重新预置增益（切歌 / 改档 / 切回 auto 共用）。
+  ///
+  /// 无论有无元数据都下发预置增益并锁定：有元数据按实测整曲电平算，
+  /// 无元数据按曲库均值先验算。
+  Future<void> _applyPresetGainForCurrentSong() async {
+    if (!isAudioEffectsSupported) return;
+    if (!volumeNormalizationEnabled ||
+        volumeGainMode != VolumeGainMode.auto) {
+      return;
+    }
+    final volume = validLoudnessDb(_currentSongVolumeDb);
+    final preset = _presetGainForVolume(volume);
+    debugPrint(
+      '[九九音乐][playback] loudness preset=${preset.toStringAsFixed(1)} '
+      'source=${volume == null ? "fallback:${_fallbackSongVolumeDb.toStringAsFixed(1)}" : "measured:${volume.toStringAsFixed(1)}"} '
+      'target=${autoLoudnessLevel.targetRmsDb.toStringAsFixed(1)}',
+    );
+    await _audioEffects.resetAgcForTrackChange(
+      presetGainDb: preset,
+      // 与预置值配套下发：原生用它反推本曲整曲响度，改档时才能算对。
+      targetRmsDb: autoLoudnessLevel.targetRmsDb,
+    );
+  }
+
   void _syncListeningTimeTracker() {
     final shouldTrack =
         addListeningTimeEnabled && isPlaying && currentSong != null;
@@ -3266,7 +3867,7 @@ class PlayerController extends ChangeNotifier {
       await prefs.remove(_pendingListenTimeKey);
     } catch (error) {
       // 服务端失败不影响本地统计，只记录日志
-      debugPrint('[KA Music][listen-time] report failed: $error');
+      debugPrint('[九九音乐][listen-time] report failed: $error');
     } finally {
       _isReportingListenTime = false;
     }
@@ -3861,7 +4462,7 @@ class PlayerController extends ChangeNotifier {
     final intentSerial = _playbackIntentSerial;
     if (autoPlay) _pendingPlaybackIntent = intentSerial;
     debugPrint(
-      '[KA Music][playback] restore-request=$requestSerial begin '
+      '[九九音乐][playback] restore-request=$requestSerial begin '
       'autoPlay=$autoPlay',
     );
     climax = null;
@@ -3876,14 +4477,17 @@ class PlayerController extends ChangeNotifier {
 
     try {
       String url;
+      PlayUrl? resolvedPlayUrl;
       final local = await downloadController?.localPathFor(song, audioQuality);
       if (requestSerial != _playRequestSerial) return;
       if (local != null) {
         url = local;
+        unawaited(_warmLoudnessMetadata(song));
       } else if (song.source == SongSource.local) {
         url = song.id;
       } else {
         final playUrl = await _resolvePlayUrl(song);
+        resolvedPlayUrl = playUrl;
         if (requestSerial != _playRequestSerial) return;
         if (playUrl.url.isEmpty) return;
         url = playUrl.url;
@@ -3913,6 +4517,13 @@ class PlayerController extends ChangeNotifier {
 
         unawaited(loadLyrics(song));
         _startPositionSaving();
+        // 冷启动恢复时同样按整曲响度预置：此时音效服务可能刚起、
+        // 或上一次 configure 已把增益归零，重新落一次才能保证开场就准确。
+        _captureSongLoudnessMeta(song, resolvedPlayUrl);
+        // 音源未给实测值时后台等它补齐（新歌批处理常要数小时~一天），
+        // 补上后自动升级为官方值；内部有 30 分钟退避，不会每次切歌都打接口。
+        unawaited(_warmLoudnessMetadata(song));
+        await _applyPresetGainForCurrentSong();
         if (autoPlay) {
           await _startPlayback(expectedIntent: intentSerial);
           if (requestSerial != _playRequestSerial) return;
@@ -3923,7 +4534,7 @@ class PlayerController extends ChangeNotifier {
       });
     } catch (e) {
       if (requestSerial == _playRequestSerial) {
-        debugPrint('[KA Music] Failed to prepare restored song: $e');
+        debugPrint('[九九音乐] Failed to prepare restored song: $e');
       }
     } finally {
       if (requestSerial == _playRequestSerial) {

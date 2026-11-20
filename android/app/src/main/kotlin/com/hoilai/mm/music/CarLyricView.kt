@@ -270,14 +270,18 @@ class CarLyricView @JvmOverloads constructor(
         lineTop = IntArray(n)
         lineHeight = IntArray(n)
         val gap = (lineGapDp * density).roundToInt()
-        val transHeight = if (showTranslation) translationSizeSp * spScale else 0f
+        // 译文高度与间距必须与 drawTranslation 使用同一套字体度量/常量，
+        // 否则行块高度和译文基线会各算各的，出现译文压在原歌词上。
+        val transFm = transActivePaint.fontMetrics
+        val transHeight = (transFm.descent - transFm.ascent).roundToInt()
+        val transGap = translationGapPx()
         var y = 0
         for (i in 0 until n) {
             val paint = if (i == activeIndex) activePaint else basePaint
             val fm = paint.fontMetrics
             var h = (fm.descent - fm.ascent).roundToInt()
-            if (showTranslation && !translations[i].isNullOrEmpty()) {
-                h += (transHeight + 6 * density).roundToInt()
+            if (hasTranslation(i)) {
+                h += transHeight + transGap
             }
             lineHeight[i] = h
             lineTop[i] = y
@@ -314,6 +318,13 @@ class CarLyricView @JvmOverloads constructor(
     private fun paddingVerticalPx() = paddingVerticalDp * density
     private fun paddingHorizontalPx() = paddingHorizontalDp * density
 
+    /** 主行与译文之间的固定间距（dp），布局与绘制共用，避免两套公式漂移。 */
+    private fun translationGapPx() = (6f * density).roundToInt()
+
+    /** 该行是否需要绘制译文（数据非空且当前开启译文）。 */
+    private fun hasTranslation(index: Int): Boolean =
+        showTranslation && !translations.getOrNull(index).isNullOrEmpty()
+
     private fun bandRect(idx: Int): Rect? {
         if (idx !in texts.indices) return null
         val top = (paddingVerticalPx() + lineTop[idx] - offsetY).roundToInt()
@@ -343,21 +354,24 @@ class CarLyricView @JvmOverloads constructor(
             val line = texts[i]
             if (line.isEmpty()) continue
 
+            val withTrans = hasTranslation(i)
             if (i == activeIndex) {
                 val hl = highlightX(line, i)
+                // 有译文时主行贴行块顶部，译文紧随其后；无译文时仍在整块内垂直居中。
+                val baseline = mainBaseline(activePaint, top, lineHeight[i], withTrans)
                 // 底：整行按当前行字号（大）暗色，保证与高亮部分逐字对齐
-                canvas.drawText(line, padX, baselineIn(activePaint, top, lineHeight[i]), activeBasePaint)
+                canvas.drawText(line, padX, baseline, activeBasePaint)
                 // 高亮：clip 到已唱宽度后重画一次亮色（酷我 clipRect+drawText，无 saveLayer）
                 if (hl > 0f) {
                     val save = canvas.save()
                     canvas.clipRect(padX, top, padX + hl, bottom)
-                    canvas.drawText(line, padX, baselineIn(activePaint, top, lineHeight[i]), activePaint)
+                    canvas.drawText(line, padX, baseline, activePaint)
                     canvas.restoreToCount(save)
                 }
-                if (showTranslation) drawTranslation(canvas, translations[i], padX, top, lineHeight[i], hl, activePaint)
+                if (withTrans) drawTranslation(canvas, translations[i], padX, top, lineHeight[i], hl, activePaint)
             } else {
-                canvas.drawText(line, padX, baselineIn(basePaint, top, lineHeight[i]), basePaint)
-                if (showTranslation) drawTranslation(canvas, translations[i], padX, top, lineHeight[i], -1f, basePaint)
+                canvas.drawText(line, padX, mainBaseline(basePaint, top, lineHeight[i], withTrans), basePaint)
+                if (withTrans) drawTranslation(canvas, translations[i], padX, top, lineHeight[i], -1f, basePaint)
             }
         }
     }
@@ -366,9 +380,11 @@ class CarLyricView @JvmOverloads constructor(
         canvas: Canvas, text: String?, padX: Float, lineTopPx: Float, blockHeight: Int, hl: Float, mainPaint: Paint
     ) {
         if (text.isNullOrEmpty()) return
+        // 主行在 hasTranslation 行里是贴顶绘制的，译文基线 = 主行字形下沿 + 固定间距。
         val mainFm = mainPaint.fontMetrics
-        val mainH = (mainFm.descent - mainFm.ascent)
-        val ty = lineTopPx + mainH + transActivePaint.fontMetrics.descent + 4 * density
+        val mainH = (mainFm.descent - mainFm.ascent).roundToInt()
+        val transFm = transActivePaint.fontMetrics
+        val ty = lineTopPx + mainH + translationGapPx() - transFm.ascent
         canvas.drawText(text, padX, ty, transBasePaint)
         if (hl > 0f) {
             val save = canvas.save()
@@ -385,6 +401,21 @@ class CarLyricView @JvmOverloads constructor(
         val textH = fm.descent - fm.ascent
         val centerY = top + blockHeight / 2f
         return centerY - textH / 2f - fm.ascent
+    }
+
+    /**
+     * 主行基线。带译文的行块 = 主行 + 间距 + 译文，主行必须贴顶，
+     * 才能给下方译文留出空间；若继续按整块居中，主行会下移约半个译文块，
+     * 与译文重叠。无译文的行维持原来的居中视觉。
+     */
+    private fun mainBaseline(
+        paint: Paint,
+        top: Float,
+        blockHeight: Int,
+        withTranslation: Boolean
+    ): Float {
+        if (!withTranslation) return baselineIn(paint, top, blockHeight)
+        return top - paint.fontMetrics.ascent
     }
 
     /** 已唱到的像素宽度（相对文本起点），逐字优先，无逐字则整行线性填充。按当前行字号测量。 */

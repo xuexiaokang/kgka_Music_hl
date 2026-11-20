@@ -359,7 +359,7 @@ class CarLeftPlayerPanel extends StatelessWidget {
         ),
         const SizedBox(width: 8),
         Text(
-          'KA Music',
+          '九九音乐',
           style: Theme.of(context).textTheme.titleSmall?.copyWith(
                 fontWeight: FontWeight.w900,
                 color: colorScheme.onSurface,

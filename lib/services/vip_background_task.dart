@@ -235,6 +235,6 @@ class VipBackgroundTask extends ChangeNotifier {
     if (!kDebugMode) {
       return;
     }
-    debugPrint('[KA Music][vip-task] $message');
+    debugPrint('[九九音乐][vip-task] $message');
   }
 }

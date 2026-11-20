@@ -125,7 +125,7 @@ class UserProfile {
 
   factory UserProfile.fromJson(Map<String, dynamic> json) {
     return UserProfile(
-      nickname: asString(json['nickname']) ?? 'KA Music 用户',
+      nickname: asString(json['nickname']) ?? '九九音乐 用户',
       avatarUrl: normalizeImageUrl(asString(json['pic'])),
     );
   }
@@ -135,7 +135,7 @@ class UserProfile {
 
   factory UserProfile.fromCache(Map<String, dynamic> json) {
     return UserProfile(
-      nickname: asString(json['nickname']) ?? 'KA Music 用户',
+      nickname: asString(json['nickname']) ?? '九九音乐 用户',
       avatarUrl: asString(json['avatarUrl']),
     );
   }
@@ -1506,17 +1506,51 @@ class AlbumShopItem {
 }
 
 class PlayUrl {
-  const PlayUrl({required this.url, required this.hash});
+  const PlayUrl({
+    required this.url,
+    required this.hash,
+    this.volumeDb,
+    this.volumePeakDb,
+  });
 
   final String url;
   final String hash;
 
+  /// 整曲平均电平（dBFS），音源 `/song/url` 的 `volume` 字段。
+  ///
+  /// 在线曲库 100 首随机抽样（2026-11-20，中文歌为主）实测 -25.2 ~ -7.1，
+  /// `volume_peak - volume` 中位数 11.1 dB，可直接当作「整曲响度」用于 AGC 前馈。
+  /// **为空有两种情况**：音源未下发（本地文件/缓存播放），或音源返回 0
+  /// （哨兵值，见 [validLoudnessDb]）；两者都由上层用曲库统计先验兜底。
+  final double? volumeDb;
+
+  /// 峰值电平（dBFS），音源 `volume_peak` 字段。
+  ///
+  /// 实测存在正值（最高 +5.8），基准不是 0dBFS，暂不用于削波保护，
+  /// 仅记录备查。
+  final double? volumePeakDb;
+
+  bool get hasLoudness => volumeDb != null && volumeDb!.isFinite;
+
   factory PlayUrl.fromJson(Map<String, dynamic> json) {
     final urls = asList(json['url']).whereType<String>().toList();
+    // 响度字段可能挂在顶层，也可能包在 data/info/song 里，两种都兼容。
+    final source = _loudnessSource(json);
     return PlayUrl(
       url: urls.isNotEmpty ? urls.first : '',
       hash: asString(json['hash']) ?? '',
+      volumeDb: validLoudnessDb(asDouble(source['volume'])),
+      volumePeakDb: asDouble(source['volume_peak']),
     );
+  }
+
+  static Map<String, dynamic> _loudnessSource(Map<String, dynamic> json) {
+    if (json.containsKey('volume')) return json;
+    for (final key in const ['data', 'info', 'song', 'result']) {
+      final nested = json[key];
+      if (nested is Map && nested.containsKey('volume')) return asMap(nested);
+    }
+    return json;
   }
 }
 
@@ -2029,6 +2063,37 @@ int? asInt(Object? value) {
     return value;
   }
   return int.tryParse(value.toString());
+}
+
+/// 音源响度字段可能是 number 或 string，统一成 double；非法值返回 null。
+double? asDouble(Object? value) {
+  if (value == null) {
+    return null;
+  }
+  if (value is num) {
+    final result = value.toDouble();
+    return result.isFinite ? result : null;
+  }
+  final text = value.toString().trim();
+  if (text.isEmpty) {
+    return null;
+  }
+  final result = double.tryParse(text);
+  return (result != null && result.isFinite) ? result : null;
+}
+
+/// 校验音源 `volume` 是否为可用的整曲响度；null 表示「无元数据」。
+///
+/// 2026-11-20 在线曲库 150 首随机抽样发现：刚发行 1~3 天的新歌会返回
+/// `volume: 0`（本样本 7 首全部是 2026-11-18 之后发行）。0 是「音源尚未
+/// 测出响度」的哨兵值，**不是** 0 dBFS 的真实电平。此前直接当成有效值，
+/// `_presetGainForVolume(0)` 会算出 `target − 0`（当时的标准档 −16 dB）并锁定，
+/// 让这些新歌被压低 16 dB 几乎听不见。
+/// 正常范围约 −25 ~ −4 dBFS，超出 ±30 一律视为脏数据。
+double? validLoudnessDb(double? value) {
+  if (value == null || !value.isFinite) return null;
+  if (value == 0 || value.abs() > 30) return null;
+  return value;
 }
 
 List<dynamic> asList(Object? value) {

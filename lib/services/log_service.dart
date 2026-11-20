@@ -135,7 +135,7 @@ class LogService {
     }
 
     _hookGlobalPrintsAndErrors();
-    record('=== KA Music Log Session Started (v${AppConfig.appVersion}) ===');
+    record('=== 九九音乐 Log Session Started (v${AppConfig.appVersion}) ===');
   }
 
   void _hookGlobalPrintsAndErrors() {
@@ -293,7 +293,7 @@ class LogService {
   String _buildSystemInfoHeader({bool isFull = true}) {
     final buffer = StringBuffer();
     buffer.writeln('==================================================');
-    buffer.writeln('KA Music Diagnostics Log${isFull ? ' (Full Logs)' : ''}');
+    buffer.writeln('九九音乐 Diagnostics Log${isFull ? ' (Full Logs)' : ''}');
     buffer.writeln('App Version : ${AppConfig.appVersion}');
     buffer.writeln('Base URL    : ${AppConfig.effectiveBaseUrl}');
     buffer.writeln('OS Platform : ${Platform.operatingSystem} ${Platform.operatingSystemVersion}');
@@ -405,7 +405,7 @@ class LogService {
   ///
   /// [fullLogs] 为 true 时导出全量日志（包含全部历史持久化文件，不设行数截断上限）；
   /// [customContent] 允许直接导出自定义日志文本（例如当前搜索/过滤视图的结果）。
-  /// Android 平台优先导出到系统公共 Download 目录（Download/KA Music/logs），
+  /// Android 平台优先导出到系统公共 Download 目录（Download/九九音乐/logs），
   /// 桌面端与其它平台优先导出到系统下载文件夹或应用文档目录。
   Future<String?> exportLogsToFile({
     String? customDestinationDir,
@@ -439,7 +439,7 @@ class LogService {
   Future<Directory> _resolvePublicExportDirectory() async {
     if (Platform.isAndroid) {
       try {
-        final publicDownload = Directory('/storage/emulated/0/Download/KA Music/logs');
+        final publicDownload = Directory('/storage/emulated/0/Download/九九音乐/logs');
         if (publicDownload.existsSync() || (await publicDownload.create(recursive: true).then((_) => true).catchError((_) => false))) {
           return publicDownload;
         }
@@ -449,7 +449,7 @@ class LogService {
     try {
       final downloadsDir = await getDownloadsDirectory();
       if (downloadsDir != null && downloadsDir.existsSync()) {
-        final subDir = Directory('${downloadsDir.path}${Platform.pathSeparator}KA Music Logs');
+        final subDir = Directory('${downloadsDir.path}${Platform.pathSeparator}九九音乐 Logs');
         if (!subDir.existsSync()) {
           await subDir.create(recursive: true);
         }
@@ -459,7 +459,7 @@ class LogService {
 
     try {
       final docsDir = await getApplicationDocumentsDirectory();
-      final subDir = Directory('${docsDir.path}${Platform.pathSeparator}KA Music Logs');
+      final subDir = Directory('${docsDir.path}${Platform.pathSeparator}九九音乐 Logs');
       if (!subDir.existsSync()) {
         await subDir.create(recursive: true);
       }

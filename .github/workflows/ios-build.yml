@@ -75,9 +75,9 @@ jobs:
           grep -c "DEVELOPMENT_TEAM = 0000000000" ios/Runner.xcodeproj/project.pbxproj
           /usr/libexec/PlistBuddy -c "Add UIBackgroundModes array" ios/Runner/Info.plist
           /usr/libexec/PlistBuddy -c "Add UIBackgroundModes:0 string audio" ios/Runner/Info.plist
-          # 应用显示名称改为「KA Music」（iOS 工程每次都会重建，故在此设置）
-          /usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName KA Music" ios/Runner/Info.plist || /usr/libexec/PlistBuddy -c "Add :CFBundleDisplayName string KA Music" ios/Runner/Info.plist
-          /usr/libexec/PlistBuddy -c "Set :CFBundleName KA Music" ios/Runner/Info.plist || /usr/libexec/PlistBuddy -c "Add :CFBundleName string KA Music" ios/Runner/Info.plist
+          # 应用显示名称改为「九九音乐」（iOS 工程每次都会重建，故在此设置）
+          /usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName 九九音乐" ios/Runner/Info.plist || /usr/libexec/PlistBuddy -c "Add :CFBundleDisplayName string 九九音乐" ios/Runner/Info.plist
+          /usr/libexec/PlistBuddy -c "Set :CFBundleName 九九音乐" ios/Runner/Info.plist || /usr/libexec/PlistBuddy -c "Add :CFBundleName string 九九音乐" ios/Runner/Info.plist
 
       # 替换 AppIcon：用 lib/assets/logo.png（1024x1024）生成全部 iOS 图标尺寸。
       # flutter create 重建工程后 AppIcon 是 Flutter 默认图标，这里用 sips（macOS
@@ -146,7 +146,7 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          name: KA Music ${{ github.ref_name }}
+          name: 九九音乐 ${{ github.ref_name }}
           tag_name: ${{ github.ref_name }}
           files: kgka_music.ipa
           generate_release_notes: true

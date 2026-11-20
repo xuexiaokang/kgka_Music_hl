@@ -1,6 +1,6 @@
 @echo off
 REM ============================================================
-REM  KA Music 本地 release APK 一键构建
+REM  九九音乐 本地 release APK 一键构建
 REM  用法: 双击运行, 或在命令行执行 scripts\build-android.bat
 REM  产物: build\app\outputs\flutter-apk\app-release.apk
 REM  正式签名依赖 android\key.properties + android\release-keystore.p12

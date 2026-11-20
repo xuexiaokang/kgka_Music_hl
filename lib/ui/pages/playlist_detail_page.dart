@@ -2406,7 +2406,7 @@ String _detailMeta(PlaylistSummary info) {
   if (info.playCount != null) {
     parts.add(_playCount(info.playCount));
   }
-  return parts.isEmpty ? '来自 KA Music' : parts.join(' · ');
+  return parts.isEmpty ? '来自 九九音乐' : parts.join(' · ');
 }
 
 String _playCount(int? value) {

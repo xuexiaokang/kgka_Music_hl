@@ -60,7 +60,7 @@ class FlacTagWriter {
         if (song.albumName?.isNotEmpty == true) 'ALBUM': song.albumName!,
         if (lyricsText?.isNotEmpty == true) 'LYRICS': lyricsText!,
       };
-      var vendor = 'KA Music';
+      var vendor = '九九音乐';
       final comments = <String>[];
       for (final block in blocks.where((block) => block.type == 4)) {
         final original = _readComments(block.bytes);

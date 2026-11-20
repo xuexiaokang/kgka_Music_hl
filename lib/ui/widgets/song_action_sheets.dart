@@ -129,7 +129,7 @@ Future<void> showSongActionSheet({
                         Navigator.of(sheetContext).pop();
                         final shareText = '🎵 推荐歌曲：《${song.title}》 - ${song.artist}'
                             '${song.albumName != null && song.albumName!.isNotEmpty ? '（专辑：${song.albumName}）' : ''}\n'
-                            '来自 KA Music';
+                            '来自 九九音乐';
                         Clipboard.setData(ClipboardData(text: shareText));
                         Toast.success('已复制歌曲分享信息到剪贴板');
                       },

@@ -2,23 +2,12 @@ import 'package:flutter/material.dart';
 import '../widgets/liquid_glass_ui.dart';
 import '../design_tokens.dart';
 import 'package:flutter/services.dart';
-import 'package:url_launcher/url_launcher.dart';
 
 import '../../config/app_config.dart';
-import '../../services/app_update_service.dart';
-import '../../services/music_api.dart';
-import '../widgets/app_update_widgets.dart';
-import '../widgets/toast.dart';
 import '../adaptive_layout.dart';
 
 class AboutPage extends StatefulWidget {
-  const AboutPage({super.key, required this.api});
-
-  static final Uri _repositoryUri = Uri.parse(
-    'https://github.com/umr-xiaomai/kgka_Music_hl',
-  );
-
-  final MusicApi api;
+  const AboutPage({super.key});
 
   @override
   State<AboutPage> createState() => _AboutPageState();
@@ -47,16 +36,6 @@ class _AboutPageState extends State<AboutPage> {
       if (mounted) {
         setState(() => _changelogLoaded = true);
       }
-    }
-  }
-
-  Future<void> _openRepository(BuildContext context) async {
-    final opened = await launchUrl(
-      AboutPage._repositoryUri,
-      mode: LaunchMode.externalApplication,
-    );
-    if (!opened) {
-      Toast.error('无法打开 GitHub 仓库链接');
     }
   }
 
@@ -103,33 +82,6 @@ class _AboutPageState extends State<AboutPage> {
                     ),
                   ),
                   const SizedBox(height: 24),
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 22),
-                    child: Row(
-                      children: [
-                        Expanded(
-                          child: AppUpdateService.isSupportedPlatform
-                              ? FilledButton.icon(
-                                  onPressed: () => checkAppUpdateManually(
-                                    context: context,
-                                    api: widget.api,
-                                  ),
-                                  icon: const Icon(
-                                    Icons.system_update_alt_rounded,
-                                  ),
-                                  label: const Text('检查更新'),
-                                )
-                              : OutlinedButton.icon(
-                                  onPressed: null,
-                                  icon: const Icon(
-                                    Icons.system_update_alt_rounded,
-                                  ),
-                                  label: const Text('暂不支持检查更新'),
-                                ),
-                        ),
-                      ],
-                    ),
-                  ),
                 ],
               ),
             ),
@@ -142,18 +94,7 @@ class _AboutPageState extends State<AboutPage> {
                     const _InfoRow(label: '当前版本', value: AppConfig.appVersion),
                     const _InfoRow(
                       label: '作者',
-                      value: '小埋-XiaoMai，其他Github开发者，小康',
-                    ),
-                    _InfoRow(
-                      label: '服务地址',
-                      value: AppConfig.hasCustomBaseUrl
-                          ? AppConfig.customBaseUrl!
-                          : AppConfig.apiBaseUrl,
-                    ),
-                    _InfoLinkRow(
-                      label: 'GitHub',
-                      value: 'umr-xiaomai/kgka_Music_hl',
-                      onTap: () => _openRepository(context),
+                      value: '小埋-XiaoMai，小康，其他Github开发者',
                     ),
                   ],
                 ),
@@ -239,59 +180,6 @@ class _AppLogo extends StatelessWidget {
               ),
             );
           },
-        ),
-      ),
-    );
-  }
-}
-
-class _InfoLinkRow extends StatelessWidget {
-  const _InfoLinkRow({
-    required this.label,
-    required this.value,
-    required this.onTap,
-  });
-
-  final String label;
-  final String value;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    final colorScheme = Theme.of(context).colorScheme;
-    return InkWell(
-      onTap: onTap,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 11),
-        child: Row(
-          children: [
-            Text(
-              label,
-              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                color: colorScheme.onSurfaceVariant,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-            const SizedBox(width: 16),
-            Expanded(
-              child: Text(
-                value,
-                textAlign: TextAlign.end,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                  color: colorScheme.primary,
-                  fontWeight: FontWeight.w800,
-                ),
-              ),
-            ),
-            const SizedBox(width: 8),
-            Icon(
-              Icons.open_in_new_rounded,
-              size: 18,
-              color: colorScheme.primary,
-            ),
-          ],
         ),
       ),
     );

@@ -55,7 +55,7 @@ void main() {
     LogService.instance.record('Log before export', level: LogLevel.info);
     final text = await LogService.instance.exportLogsText();
 
-    expect(text, contains('KA Music Diagnostics Log (Full Logs)'));
+    expect(text, contains('九九音乐 Diagnostics Log (Full Logs)'));
     expect(text, contains('Log before export'));
   });
 
@@ -85,7 +85,7 @@ void main() {
 
       final content = await file.readAsString();
       expect(content, contains('File export log entry'));
-      expect(content, contains('KA Music Diagnostics Log (Full Logs)'));
+      expect(content, contains('九九音乐 Diagnostics Log (Full Logs)'));
     } finally {
       if (exportDir.existsSync()) {
         exportDir.deleteSync(recursive: true);

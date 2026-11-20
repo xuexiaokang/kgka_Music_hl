@@ -523,7 +523,7 @@ class _LoginHeader extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text(
-          'KA Music',
+          '九九音乐',
           style: textTheme.headlineMedium?.copyWith(
             color: colorScheme.onSurface,
             fontWeight: FontWeight.w900,

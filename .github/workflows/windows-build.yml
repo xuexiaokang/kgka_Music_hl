@@ -131,7 +131,7 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          name: KA Music ${{ github.ref_name }}
+          name: 九九音乐 ${{ github.ref_name }}
           tag_name: ${{ github.ref_name }}
           files: ${{ steps.pack.outputs.zip }}
           generate_release_notes: true

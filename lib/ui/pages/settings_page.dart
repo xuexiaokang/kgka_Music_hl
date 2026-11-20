@@ -13,7 +13,6 @@ import '../../controllers/player_controller.dart';
 import '../../controllers/theme_controller.dart';
 import '../../controllers/local_music_controller.dart';
 import '../../services/audio_effects_service.dart';
-import '../../services/app_update_service.dart';
 import '../../services/cache_service.dart';
 import '../../services/music_api.dart';
 import '../widgets/audio_effects_sheet.dart';
@@ -128,7 +127,7 @@ class SettingsPage extends StatelessWidget {
     }
   }
 
-  /// 选择自动增益的目标响度（只补不减下的补增益上限，非归一化目标）。
+  /// 选择自动增益的目标响度（所有歌统一到这个响度：偏轻补、偏响压）。
   Future<void> _selectAutoLoudness(
     BuildContext context,
     PlayerController player,
@@ -153,9 +152,9 @@ class SettingsPage extends StatelessWidget {
                 ),
                 const SizedBox(height: 8),
                 Text(
-                  '只把偏轻的歌补到接近该响度；已达到或超过该响度的歌保持原样（不减增益）。'
-                  '档位数值越大，越多歌会被判定为偏轻、补得越多：轻柔（-20）下多数歌曲'
-                  '已达标，通常不动作；响亮（-12）补得最多，但可能触及限幅。',
+                  '把每首歌都调到接近该响度：偏轻的歌补增益，偏响的歌减增益（最大 -24dB）。'
+                  '轻柔（-16）整体更安静、动态保留更多；标准（-12）按实车听感对齐网易云；'
+                  '响亮（-8）最响，多数歌曲峰值会触及限幅，建议只在高速等嘈杂场景使用。',
                   style: Theme.of(sheetContext).textTheme.bodyMedium,
                 ),
                 const SizedBox(height: 8),
@@ -573,7 +572,7 @@ class SettingsPage extends StatelessWidget {
                       icon: Icons.volume_up_rounded,
                       iconColor: colorScheme.primary,
                       title: '音量均衡',
-                      subtitle: '降低各首歌曲音量差异，开场快速测定后锁定增益',
+                      subtitle: '所有歌曲统一到同一响度，切换不再忽大忽小',
                       value: player.volumeNormalizationEnabled,
                       onChanged: (value) async {
                         final ok =
@@ -591,7 +590,7 @@ class SettingsPage extends StatelessWidget {
                         iconColor: colorScheme.primary,
                         title: '音量增益策略',
                         subtitle: player.volumeGainMode == VolumeGainMode.auto
-                            ? '自动适配 · 只补偏轻的歌，开场几秒给足后整曲不变'
+                            ? '自动适配 · 按整曲响度增减，所有歌同一响度'
                             : '固定增益 · ${_gainLabel(player.volumeGainDb)}',
                         onTap: () => _selectVolumeGainMode(context, player),
                       ),
@@ -603,7 +602,7 @@ class SettingsPage extends StatelessWidget {
                           title: '目标响度',
                           subtitle:
                               '${player.autoLoudnessLevel.label} · ${player.autoLoudnessLevel.targetRmsDb.toStringAsFixed(0)} dBFS'
-                              '（补增益上限，越大补得越多）',
+                              '（所有歌统一到该响度，数值越大越响）',
                           onTap: () => _selectAutoLoudness(context, player),
                         ),
                         _AgcLiveTile(player: player, iconColor: colorScheme.primary),
@@ -869,12 +868,10 @@ class SettingsPage extends StatelessWidget {
                       icon: Icons.info_outline_rounded,
                       iconColor: colorScheme.primary,
                       title: '关于',
-                      subtitle: AppUpdateService.isSupportedPlatform
-                          ? '版本、更新日志与检查更新'
-                          : '版本与更新日志',
+                      subtitle: '版本与更新日志',
                       onTap: () => Navigator.of(context).push(
                         MaterialPageRoute(
-                          builder: (_) => AboutPage(api: api),
+                          builder: (_) => const AboutPage(),
                         ),
                       ),
                     ),
@@ -1615,6 +1612,7 @@ class _AgcLiveTile extends StatefulWidget {
 
 class _AgcLiveTileState extends State<_AgcLiveTile> {
   Timer? _pollTimer;
+  bool _expanded = false;
 
   @override
   void initState() {
@@ -1625,7 +1623,11 @@ class _AgcLiveTileState extends State<_AgcLiveTile> {
     });
     // 每 2 秒轮询：切歌时 audioSession 不变也能刷新出真实收敛值。
     _pollTimer = Timer.periodic(const Duration(seconds: 2), (_) {
-      if (mounted) widget.player.refreshAgcStatus();
+      if (!mounted) return;
+      // 展开时主动重建一次：切歌/响度补拉不一定伴随 notifyListeners，
+      // 保证详情面板里的元数据不会停在上一首。
+      if (_expanded) setState(() {});
+      widget.player.refreshAgcStatus();
     });
   }
 
@@ -1635,27 +1637,223 @@ class _AgcLiveTileState extends State<_AgcLiveTile> {
     super.dispose();
   }
 
+  /// 第二行固定给出当前曲元数据摘要；点按展开可看完整字段。
+  String _metaSummary(SongLoudnessMeta meta) {
+    final volumeLabel = meta.volumeDb != null
+        ? '${meta.volumeDb!.toStringAsFixed(1)} dBFS（${meta.sourceLabel}）'
+        : '无元数据 · 用先验 ${meta.fallbackVolumeDb.toStringAsFixed(1)} dBFS';
+    return '${meta.songTitle} · $volumeLabel'
+        ' · 点按${_expanded ? "收起" : "查看"}详情';
+  }
+
   String _subtitle(AgcStatus? status) {
-    if (status == null) return '正在测量当前歌曲响度…';
-    if (!status.active) return '自动增益未激活 · 请确认录音权限';
+    final meta = widget.player.currentSongLoudnessMeta;
+    final metaLine = _metaSummary(meta);
+    if (status == null) return '自动增益状态未就绪…\n$metaLine';
+    if (!status.active) return '自动增益未激活 · 请确认录音权限\n$metaLine';
     final gain = signedGainLabel(status.gainDb, fractionDigits: 1);
-    // 开场约 4.8 秒按 P80 代表性响度快速给足增益后整曲冻结；「瞬时」是短窗电平，
-    // 会随人声/间奏起伏，但绝不驱动增益变化，故明确区分两者。
-    // 锁定依据是「开场」这十几帧样本，不是整曲扫描，故用「已锁定本曲增益」
-    // 而非「已按整曲响度锁定」，避免让用户误以为测完了整首歌。
+    // 锁定增益有三种来源，必须如实区分（续十二已删除开场测定路径）：
+    // - 音源实测：`/song/url` 下发整曲响度，开场即按整曲电平算好（最准）；
+    // - 端上实测：上一轮播放时 Visualizer 累计整曲 RMS 并按音源口径标定；
+    // - 先验：无元数据（新歌/本地文件），按曲库均值 -10.7 dBFS 预估。
+    // 「瞬时」是短窗电平，会随人声/间奏起伏，但绝不驱动增益变化。
+    final lockLabel = !status.locked
+        ? ' · 等待预置增益'
+        : (widget.player.presetGainIsEstimate
+            ? ' · 已按曲库均值预估锁定'
+            : (meta.source == SongLoudnessSource.measured
+                ? ' · 已按端上整曲实测锁定'
+                : ' · 已按整曲响度锁定'));
     return '当前 $gain'
         ' · 瞬时 ${status.measuredRmsDb.toStringAsFixed(1)} dBFS'
-        '${status.locked ? ' · 已锁定本曲增益' : ' · 开场快速测定中'}';
+        '$lockLabel\n$metaLine';
   }
 
   @override
   Widget build(BuildContext context) {
-    return _SettingsTile(
-      icon: Icons.analytics_outlined,
-      iconColor: widget.iconColor,
-      title: '实时增益',
-      subtitle: _subtitle(widget.player.agcStatus),
-      onTap: () => widget.player.refreshAgcStatus(),
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        _SettingsTile(
+          icon: Icons.analytics_outlined,
+          iconColor: widget.iconColor,
+          title: '实时增益',
+          subtitle: _subtitle(widget.player.agcStatus),
+          onTap: () {
+            setState(() => _expanded = !_expanded);
+            widget.player.refreshAgcStatus();
+          },
+        ),
+        if (_expanded)
+          _buildMetaCard(
+            context,
+            widget.player.currentSongLoudnessMeta,
+            widget.player.agcStatus,
+          ),
+      ],
     );
+  }
+
+  /// 当前歌曲响度元数据详情：音源输入 → 推导 → 实际增益，逐项如实标注。
+  Widget _buildMetaCard(
+    BuildContext context,
+    SongLoudnessMeta meta,
+    AgcStatus? status,
+  ) {
+    final colorScheme = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 14),
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+        decoration: BoxDecoration(
+          color: colorScheme.surfaceContainerHighest.withValues(alpha: .5),
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            _metaHeader(context, '当前歌曲'),
+            _metaRow(context, '曲目', '${meta.songTitle} · ${meta.artist}'),
+            _metaRow(
+              context,
+              '来源 / hash',
+              '${meta.songSourceLabel} · ${_shortHash(meta.hash)}',
+            ),
+            const SizedBox(height: 8),
+            _metaHeader(context, '响度元数据（音源 /song/url）'),
+            _metaRow(
+              context,
+              '整曲响度 volume',
+              meta.volumeDb != null
+                  ? '${meta.volumeDb!.toStringAsFixed(1)} dBFS · ${meta.sourceLabel}'
+                  : '无（返回 0 或未下发）',
+            ),
+            _metaRow(
+              context,
+              '峰值 volume_peak',
+              meta.volumePeakDb != null
+                  ? '${meta.volumePeakDb!.toStringAsFixed(1)} dBFS'
+                  : '无',
+            ),
+            _metaRow(
+              context,
+              '峰均比 crest',
+              meta.crestDb != null
+                  ? '${meta.crestDb!.toStringAsFixed(1)} dB'
+                  : '—',
+            ),
+            const SizedBox(height: 8),
+            _metaHeader(context, '增益推导'),
+            _metaRow(
+              context,
+              '目标响度 T',
+              '${meta.targetRmsDb.toStringAsFixed(1)} dBFS',
+            ),
+            _metaRow(
+              context,
+              '实际采用电平',
+              '${meta.effectiveVolumeDb.toStringAsFixed(1)} dBFS'
+                  '${meta.isEstimate ? "（先验）" : "（实测）"}',
+            ),
+            _metaRow(
+              context,
+              '预置增益 = T − 电平',
+              signedGainLabel(meta.presetGainDb),
+            ),
+            _metaRow(
+              context,
+              '口径标定偏置（全局）',
+              '${signedGainLabel(meta.calibrationOffsetDb)} dB · n=${meta.calibrationSamples}'
+                  '${meta.calibrationReady ? "（已就绪）" : "（未就绪，仍用先验）"}',
+            ),
+            _metaRow(
+              context,
+              '会话增益 / 瞬时',
+              status == null
+                  ? '—'
+                  : '${signedGainLabel(status.gainDb)} / '
+                      '${status.measuredRmsDb.toStringAsFixed(1)} dBFS',
+            ),
+            const SizedBox(height: 8),
+            Text(
+              meta.isEstimate
+                  ? '本曲无整曲响度元数据，按中文曲库统计中位数 '
+                      '${meta.fallbackVolumeDb.toStringAsFixed(1)} dBFS 预估并锁定；'
+                      '整曲播完后端上实测会写进缓存，下次播放自动改用实测值。'
+                  : (meta.source == SongLoudnessSource.measured
+                      ? '本曲按上一轮播放时端上累计的整曲 RMS（已按音源口径标定）'
+                          '预置并锁定；音源补上 volume 后下次播放自动改用官方实测值。'
+                      : (meta.source == SongLoudnessSource.cache
+                          ? '本曲使用历史缓存中的整曲响度预置并锁定，'
+                              '开场即准确、整曲不再跳变。'
+                          : '本曲按音源整曲响度实测值预置并锁定，'
+                              '开场即准确、整曲不再跳变。')),
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                color: colorScheme.onSurfaceVariant,
+                fontSize: 11.5,
+                height: 1.35,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _metaHeader(BuildContext context, String text) {
+    final colorScheme = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 4),
+      child: Text(
+        text,
+        style: TextStyle(
+          fontSize: 11.5,
+          fontWeight: FontWeight.w700,
+          color: colorScheme.primary,
+        ),
+      ),
+    );
+  }
+
+  Widget _metaRow(BuildContext context, String label, String value) {
+    final colorScheme = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 2.5),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Expanded(
+            flex: 5,
+            child: Text(
+              label,
+              style: TextStyle(
+                fontSize: 12.5,
+                color: colorScheme.onSurfaceVariant,
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            flex: 6,
+            child: Text(
+              value,
+              textAlign: TextAlign.end,
+              style: TextStyle(
+                fontSize: 12.5,
+                fontFamily: 'monospace',
+                fontWeight: FontWeight.w500,
+                color: colorScheme.onSurface,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  String _shortHash(String hash) {
+    if (hash.isEmpty) return '—';
+    return hash.length <= 12 ? hash : '${hash.substring(0, 12)}…';
   }
 }

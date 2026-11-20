@@ -619,7 +619,7 @@ class _UserProfileHeader extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  profile?.nickname ?? 'KA Music 用户',
+                  profile?.nickname ?? '九九音乐 用户',
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: theme.textTheme.titleMedium?.copyWith(

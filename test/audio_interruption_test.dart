@@ -319,6 +319,24 @@ void main() {
     expect(handler.automaticPlays, 0);
   });
 
+  test('manual play works after an interruption that never sends end', () async {
+    await Future<void>.delayed(Duration.zero);
+    handler.audioPlayer.setPlaying(true);
+    // 对方 App 抢走焦点后未 abandon：只收到 begin，没有 end。
+    session.interrupt(true);
+    await Future<void>.delayed(Duration.zero);
+    expect(handler.audioPlayer.playing, isFalse);
+
+    // 用户切回应用后主动点播放，必须能重新起播而不是被守卫静默吞掉。
+    await player.togglePlay();
+    expect(
+      handler.audioPlayer.playing,
+      isTrue,
+      reason: 'a manual play intent must clear stale interruption state',
+    );
+    expect(handler.automaticPlays, 1);
+  });
+
   test('a playing song pauses for a call and resumes once', () async {
     await Future<void>.delayed(Duration.zero);
     handler.audioPlayer.setPlaying(true);

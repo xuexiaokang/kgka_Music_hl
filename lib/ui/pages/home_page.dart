@@ -1943,16 +1943,15 @@ class _PlaylistCard extends StatelessWidget {
             children: [
               Artwork(url: playlist.coverUrl, size: size, borderRadius: 10),
               const SizedBox(height: 8),
-              SizedBox(
-                height: 40,
-                child: Text(
-                  playlist.title,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                    fontWeight: FontWeight.w800,
-                    height: 1.16,
-                  ),
+              // 标题自适应两行高度：原先固定 40px + height 1.16 会把第二行
+              // 中文字的下半截（尤其字体放大时）裁掉，表现为"字缺失"。
+              // 行高回到主题默认 1.4、字重与同页其它卡片统一为 w700。
+              Text(
+                playlist.title,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                  fontWeight: FontWeight.w700,
                 ),
               ),
               const SizedBox(height: 2),

@@ -1,8 +1,8 @@
 <p align="center">
-  <img src="lib/assets/logo.png" alt="KA Music Logo" width="120" height="120" />
+  <img src="lib/assets/logo.png" alt="九九音乐 Logo" width="120" height="120" />
 </p>
 
-<h1 align="center">KA Music</h1>
+<h1 align="center">九九音乐</h1>
 
 <p align="center">
   <strong>一个精致的第三方音乐客户端</strong>
@@ -30,7 +30,7 @@
 
 ## 📖 简介
 
-KA Music 是一个功能丰富的 **第三方音乐播放器**，使用 Flutter 框架构建，支持 Android、iOS、Windows、macOS、Linux 及 Web 六大平台。它提供跨平台音乐搜索、在线播放、歌词展示、下载缓存等完整的音乐体验，并采用 Material You 设计语言，支持深色模式和高度自定义主题。
+九九音乐 是一个功能丰富的 **第三方音乐播放器**，使用 Flutter 框架构建，支持 Android、iOS、Windows、macOS、Linux 及 Web 六大平台。它提供跨平台音乐搜索、在线播放、歌词展示、下载缓存等完整的音乐体验，并采用 Material You 设计语言，支持深色模式和高度自定义主题。
 
 > 🔌 该项目通过第三方 API 获取音乐数据，仅供学习交流使用。
 
@@ -106,7 +106,7 @@ KA Music 是一个功能丰富的 **第三方音乐播放器**，使用 Flutter 
 #### 导入 QQ 音乐自建歌单
 
 1. 在 QQ 音乐中把要导入的歌单设为公开，使用「分享」复制歌单链接或整段分享文本。
-2. 登录 KA Music 的酷狗账号，打开「我的 → 导入 QQ / 网易云歌单」，粘贴内容后点击「解析歌单」。
+2. 登录 九九音乐 的酷狗账号，打开「我的 → 导入 QQ / 网易云歌单」，粘贴内容后点击「解析歌单」。
 3. 确认歌单名称和歌曲数量，选择新建歌单或已有的自建歌单，再点击「开始导入」。
 4. 完成后查看新增、已存在、未匹配及请求失败的数量；未匹配和失败歌曲可以展开查看。可停止导入，也可重新导入以重试失败项。
 

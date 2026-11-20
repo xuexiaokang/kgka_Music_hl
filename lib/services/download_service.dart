@@ -77,7 +77,7 @@ class DownloadService {
 
   /// 持久下载目录。
   ///
-  /// Android 优先使用系统公共下载目录（/storage/emulated/0/Download/KA Music），
+  /// Android 优先使用系统公共下载目录（/storage/emulated/0/Download/九九音乐），
   /// 需要存储权限；其他平台或获取失败时回退到应用文档目录。
   Future<Directory> downloadDir() async {
     try {
@@ -90,7 +90,7 @@ class DownloadService {
         return customDir;
       }
     } catch (e) {
-      debugPrint('[KA Music] Custom download dir error: $e');
+      debugPrint('[九九音乐] Custom download dir error: $e');
     }
 
     if (Platform.isAndroid) {
@@ -106,7 +106,7 @@ class DownloadService {
           return dir;
         }
       } catch (e) {
-        debugPrint('[KA Music] Failed to access public Download dir: $e');
+        debugPrint('[九九音乐] Failed to access public Download dir: $e');
       }
     }
     final base = await getApplicationDocumentsDirectory();

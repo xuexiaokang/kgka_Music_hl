@@ -85,7 +85,7 @@ class AudioEffectsService {
       }
       return EqualizerConfig.fromMap(result);
     } on PlatformException catch (error) {
-      debugPrint('[KA Music][audio-effects] Equalizer config failed: $error');
+      debugPrint('[九九音乐][audio-effects] Equalizer config failed: $error');
       return null;
     } on MissingPluginException {
       return null;
@@ -109,7 +109,7 @@ class AudioEffectsService {
       });
       return result ?? false;
     } on PlatformException catch (error) {
-      debugPrint('[KA Music][audio-effects] Equalizer failed: $error');
+      debugPrint('[九九音乐][audio-effects] Equalizer failed: $error');
       return false;
     } on MissingPluginException {
       return false;
@@ -134,7 +134,7 @@ class AudioEffectsService {
       });
       return result ?? false;
     } on PlatformException catch (error) {
-      debugPrint('[KA Music][audio-effects] BassBoost failed: $error');
+      debugPrint('[九九音乐][audio-effects] BassBoost failed: $error');
       return false;
     } on MissingPluginException {
       return false;
@@ -146,7 +146,7 @@ class AudioEffectsService {
     required bool enabled,
     double gainDb = 3.0,
     bool autoGain = false,
-    double targetRmsDb = -16.0,
+    double targetRmsDb = -12.0,
   }) async {
     if (!isAudioEffectsSupported) {
       return false;
@@ -162,7 +162,7 @@ class AudioEffectsService {
       });
       return result ?? false;
     } on PlatformException catch (error) {
-      debugPrint('[KA Music][audio-effects] VolumeNormalization failed: $error');
+      debugPrint('[九九音乐][audio-effects] VolumeNormalization failed: $error');
       return false;
     } on MissingPluginException {
       return false;
@@ -181,7 +181,7 @@ class AudioEffectsService {
       });
       return result ?? false;
     } on PlatformException catch (error) {
-      debugPrint('[KA Music][audio-effects] setAgcTarget failed: $error');
+      debugPrint('[九九音乐][audio-effects] setAgcTarget failed: $error');
       return false;
     } on MissingPluginException {
       return false;
@@ -204,7 +204,7 @@ class AudioEffectsService {
       });
       return result ?? false;
     } on PlatformException catch (error) {
-      debugPrint('[KA Music][audio-effects] setAgcActive failed: $error');
+      debugPrint('[九九音乐][audio-effects] setAgcActive failed: $error');
       return false;
     } on MissingPluginException {
       return false;
@@ -212,22 +212,61 @@ class AudioEffectsService {
   }
 
   /// 切歌归位：在下一首真正出声之前同步 await 调用，把原生 AGC 的 postGain
-  /// 立即打回基准档位并清掉上一首的收敛状态，消除「轻歌高增益被带到响歌」的爆音窗口。
-  /// 原生侧只写一次 postGain + 清内存状态，不重建效果器 / Visualizer，不会卡顿。
-  Future<bool> resetAgcForTrackChange({double gainDb = 3.0}) async {
+  /// 立即写成本曲预置增益并锁定，消除「轻歌高增益被带到响歌」的爆音窗口。
+  /// 原生侧只写一次 postGain + 重置内存状态，不重建效果器 / Visualizer，不会卡顿。
+  ///
+  /// [presetGainDb] 由上层按整曲响度算好：有音源实测 `volume` 时按实测值，
+  /// 无元数据（新歌 `volume=0` / 本地文件 / 缓存播放）时按曲库均值先验。
+  /// 续十二已删除开场 4.8 秒快测回退路径，此值必填。
+  /// 可以为负：偏响的歌靠负增益压到目标响度，实现「所有歌一样响」。
+  ///
+  /// [targetRmsDb] 与 [presetGainDb] 配套下发：原生要用 target - gain 反推整曲
+  /// 响度作为改档重算基准，缺了它冷启动/改档后会按默认档位算错。
+  Future<bool> resetAgcForTrackChange({
+    required double presetGainDb,
+    double? targetRmsDb,
+  }) async {
     if (!isAudioEffectsSupported) {
       return false;
     }
     try {
       final result = await _channel.invokeMethod<bool>('resetAgcForTrackChange', {
-        'gainDb': gainDb,
+        'presetGainDb': presetGainDb,
+        'targetRmsDb': targetRmsDb,
       });
       return result ?? false;
     } on PlatformException catch (error) {
-      debugPrint('[KA Music][audio-effects] resetAgcForTrackChange failed: $error');
+      debugPrint('[九九音乐][audio-effects] resetAgcForTrackChange failed: $error');
       return false;
     } on MissingPluginException {
       return false;
+    }
+  }
+
+  /// 取走并清空「上一曲」的端上整曲 RMS 累积（续十一）。
+  ///
+  /// 由 [PlayerController] 在切歌最早期调用：此时 currentSong 仍是旧歌，结算值
+  /// 可以写进它的响度缓存。原生读数不含 postGain，所以 rmsDb 就是原始素材电平；
+  /// 上层还要按音源 `volume` 做一次口径标定偏置修正再落盘。
+  Future<TrackRmsResult?> consumeTrackRms() async {
+    if (!isAudioEffectsSupported) {
+      return null;
+    }
+    try {
+      final result =
+          await _channel.invokeMethod<Map<Object?, Object?>>('consumeTrackRms');
+      if (result == null) {
+        return null;
+      }
+      return TrackRmsResult(
+        rmsDb: (result['rmsDb'] as num?)?.toDouble(),
+        samples: (result['samples'] as num?)?.toInt() ?? 0,
+      );
+    } on PlatformException catch (error) {
+      debugPrint('[九九音乐][audio-effects] consumeTrackRms failed: $error');
+      return null;
+    } on MissingPluginException {
+      return null;
     }
   }
 
@@ -244,12 +283,28 @@ class AudioEffectsService {
       }
       return AgcStatus.fromMap(result);
     } on PlatformException catch (error) {
-      debugPrint('[KA Music][audio-effects] getAgcStatus failed: $error');
+      debugPrint('[九九音乐][audio-effects] getAgcStatus failed: $error');
       return null;
     } on MissingPluginException {
       return null;
     }
   }
+}
+
+/// 原生端「上一曲」整曲 RMS 累积的结算结果（续十一）。
+///
+/// [rmsDb] 是线性功率域平均后转回的 dBFS；[samples] 是非静音 400ms 采样数，
+/// 用于判断这首歌是否播够了足够长的代表性片段，避免半首歌的偏值写进缓存。
+class TrackRmsResult {
+  const TrackRmsResult({required this.rmsDb, required this.samples});
+
+  final double? rmsDb;
+  final int samples;
+
+  /// 与原生 AGC_SAMPLE_INTERVAL_MS = 400ms 对齐。
+  double get effectiveSeconds => samples * 0.4;
+
+  bool get hasData => rmsDb != null && rmsDb!.isFinite && samples > 0;
 }
 
 /// 实时响度 AGC 的快照，用于设置页展示「当前增益 / 测得响度」。
@@ -290,7 +345,7 @@ class AgcStatus {
       active: map['active'] as bool? ?? false,
       gainDb: (map['gainDb'] as num?)?.toDouble() ?? 0.0,
       measuredRmsDb: (map['measuredRmsDb'] as num?)?.toDouble() ?? 0.0,
-      targetRmsDb: (map['targetRmsDb'] as num?)?.toDouble() ?? -16.0,
+      targetRmsDb: (map['targetRmsDb'] as num?)?.toDouble() ?? -12.0,
       locked: map['locked'] as bool? ?? false,
     );
   }
