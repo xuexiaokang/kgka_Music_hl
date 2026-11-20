@@ -35,6 +35,21 @@ pubspec = version: 2026.11.20+20279
 
 > 本次为 v2026.10.31 之后的累计发版（18 个提交、66 文件 +8633 行）。音量均衡链路历经 AGC 开环前馈重构、MBC 透明增益级、时域变体回退等多轮修复，最终语义为**只补不减**（增益 `[0,+18]dB`），目标响度是补增益上限而非双向归一化目标。MuMu 实证覆盖安装与效果链，真车机逐曲听感仍未实测。
 
+**2026-11-20 发版后修复：打开音量均衡开关未主动申请 RECORD_AUDIO（已发版 v2026.11.20.1）**
+
+- 现象：首次安装 / 从未手动切换过增益策略时，直接打开「音量均衡」总开关不弹录音权限请求；原生 `startLoudnessAgc()` 检查到权限未授予即打印 `AGC skipped: RECORD_AUDIO permission not granted` 并直接返回，Visualizer 不创建、测量线程不跑，**实时增益永远无数据**，而 UI 仍显示「自动适配」，形成开关已开却无效果的假成功。
+- 根因：`_ensureRecordAudioPermission()` 只挂在 `setVolumeGainMode(auto)`（手动切策略）一个入口，而 `volumeGainMode` 默认值就是 `auto`。因此「打开总开关」「冷启动恢复设置」「audioSessionId 变化（切歌）」三条路径都绕过权限申请，直接以 `autoGain=true` 下发原生并被静默跳过。
+- 修复（`lib/controllers/player_controller.dart` + `lib/ui/pages/settings_page.dart`）：
+  - 权限确保下沉到 `_applyVolumeNormalization()` —— 所有 `autoGain=true` 下发的唯一汇合点，且**严格先于** `configureVolumeNormalization`，保证原生启动 Visualizer 时权限已到位。
+  - `_applyVolumeNormalization()` 改为返回 `bool`；权限被拒时降级 `fixed`（内存态 + 持久化 + 清 `agcStatus` + `notifyListeners`），以 `autoGain=false` 下发，静态增益补偿照常工作，杜绝「显示自动、实际无 AGC」的假成功。
+  - `setVolumeNormalizationEnabled()` 改为 `Future<bool>` 并顺序 await；设置页开关 `onChanged` 拿到 false 时 Toast 提示「未获得录音权限，已回退固定增益模式」。
+  - `_ensureRecordAudioPermission()` 增加 in-flight Future 去重：冷启动恢复与首次 `audioSessionId` 上报几乎同时触发下发，合并为一次系统弹窗；已授予时缓存命中，切歌等高频调用零 platform channel 往返。
+  - `setVolumeGainMode()` 被拒分支补持久化 `fixed`，避免每次冷启动反复弹权限对话框。
+- 原生层未改动：`AndroidManifest.xml` 早已声明 `RECORD_AUDIO`；`startLoudnessAgc()` 的权限检查保留作为最后一道防线。
+- **MuMu 车机实例（index 1 / Android 15）实测**：预置 `enabled=true` + `mode=auto` + `pm revoke RECORD_AUDIO` 后冷启动 → `GrantPermissionsActivity` 弹出（证明主动申请）→ 权限变为 `granted=true, USER_SET` → logcat `configure: enabled=true autoGain=true` + `AGC started: session=17 mode=PEAK_RMS`，全程无 `AGC skipped`，`AGC pulse` 持续输出实测电平（-17~-35dBFS，增益收敛 +9~11dB）。`flutter analyze` 无新增问题（14 项为项目既有 info/warning）。
+- 产物：`build/app/outputs/flutter-apk/app-release.apk`，26,499,833 B，md5 `9a19172c04c3df7dbfe6b3543bb51713`，`versionCode=20280` / `versionName=2026.11.20`（`aapt dump badging` 实证），正式签名 SHA-256 `76a87e47…`（`apksigner verify --print-certs` 实证，与上一版同证书）。已发布为 **`v2026.11.20.1`**（同日修订版）：`v2026.11.20` 的 tag 与 Release 已占用，按 §7.3 不得改写已发布历史，故新建 tag 与独立 Release，上一版保持不动。
+- 未实测：权限被「拒绝」时的降级分支（MuMu 会自动授予权限对话框），代码路径已静态确认。
+
 **2026-11-19 修复：实时增益测得值不准（c1c2cbf）**
 
 - 现象：上一版虽修了无符号基准与目标钳制，但测得值仍不准。根因是 AGC 从 8bit 波形手算 RMS 的方案本身有根本缺陷：

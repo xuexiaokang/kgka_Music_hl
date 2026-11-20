@@ -567,6 +567,10 @@ class PlayerController extends ChangeNotifier {
   /// 避免每次切到 auto 都 await 权限查询造成菜单卡顿。被拒存 false，下次仍会重试申请。
   bool _micPermissionGranted = false;
 
+  /// 正在进行的录音权限申请。冷启动恢复设置与首次 audioSession 上报可能几乎
+  /// 同时触发 _applyVolumeNormalization，合并成一次系统弹窗，避免并发 request。
+  Future<bool>? _recordAudioPermissionRequest;
+
   bool bluetoothLyricsEnabled = false;
   // 普通蓝牙车机只读取 AVRCP 标题，不会读取手机上的歌词广播或 extras。
   bool bluetoothLyricsTitleSyncEnabled = true;
@@ -1529,17 +1533,21 @@ class PlayerController extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// 开关音量均衡功能。
-  Future<void> setVolumeNormalizationEnabled(bool enabled) async {
-    if (volumeNormalizationEnabled == enabled) return;
+  /// 开关音量均衡功能。返回 false 表示「本想启用自动适配，但录音权限被拒，
+  /// 已回退固定增益」，供设置页提示用户。
+  ///
+  /// 权限申请必须先于原生 configure 完成：否则原生 startLoudnessAgc 会因缺
+  /// RECORD_AUDIO 静默跳过，表现为开关已开、实时增益却始终拿不到数据。
+  Future<bool> setVolumeNormalizationEnabled(bool enabled) async {
+    if (volumeNormalizationEnabled == enabled) return true;
     volumeNormalizationEnabled = enabled;
+    // 先刷新开关状态，后续 await 权限对话框期间 UI 不会假死。
     notifyListeners();
-    unawaited(() async {
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setBool(_volumeNormalizationEnabledSettingKey, enabled);
-      await _applyVolumeNormalization();
-      notifyListeners();
-    }());
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_volumeNormalizationEnabledSettingKey, enabled);
+    final autoOk = await _applyVolumeNormalization();
+    notifyListeners();
+    return autoOk;
   }
 
   /// 调整音量均衡的静态增益补偿。
@@ -1569,9 +1577,11 @@ class PlayerController extends ChangeNotifier {
         !_micPermissionGranted) {
       final granted = await _ensureRecordAudioPermission();
       if (!granted) {
-        // 录音权限被拒：保持 fixed 模式，避免 auto 静默失效。
+        // 录音权限被拒：保持 fixed 模式并落盘，避免 auto 静默失效，
+        // 也避免每次冷启动恢复都重新弹一次权限对话框。
         volumeGainMode = VolumeGainMode.fixed;
         notifyListeners();
+        unawaited(_persistVolumeGainMode(VolumeGainMode.fixed));
         return false;
       }
     }
@@ -1634,10 +1644,23 @@ class PlayerController extends ChangeNotifier {
     }());
   }
 
-  /// 申请 RECORD_AUDIO。已授权直接返回 true；永久拒绝时引导去设置页。
+  /// 申请 RECORD_AUDIO。已授权直接返回 true；并发调用合并为一次系统弹窗。
+  /// 权限被拒时由上层降级为 fixed + Toast，不在此直接跳系统设置页打断操作。
   Future<bool> _ensureRecordAudioPermission() async {
     if (!Platform.isAndroid) return false;
     if (_micPermissionGranted) return true;
+    final inflight = _recordAudioPermissionRequest;
+    if (inflight != null) return inflight;
+    final future = _requestRecordAudioPermission();
+    _recordAudioPermissionRequest = future;
+    try {
+      return await future;
+    } finally {
+      _recordAudioPermissionRequest = null;
+    }
+  }
+
+  Future<bool> _requestRecordAudioPermission() async {
     final status = await Permission.microphone.status;
     if (status.isGranted) {
       _micPermissionGranted = true;
@@ -1646,6 +1669,12 @@ class PlayerController extends ChangeNotifier {
     final result = await Permission.microphone.request();
     _micPermissionGranted = result.isGranted;
     return _micPermissionGranted;
+  }
+
+  /// 权限被拒时把策略落盘为 fixed，避免每次冷启动都重新弹权限对话框。
+  Future<void> _persistVolumeGainMode(VolumeGainMode mode) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_volumeGainModeSettingKey, mode.name);
   }
 
   /// 拉取一次 AGC 快照（设置页点击「实时增益」或模式切换后调用）。
@@ -3082,13 +3111,34 @@ class PlayerController extends ChangeNotifier {
     );
   }
 
-  Future<void> _applyVolumeNormalization() async {
-    if (!isAudioEffectsSupported) {
-      return;
+  /// 把所有音量均衡参数下发到原生。返回 false 仅当「需要自动适配但录音权限
+  /// 被拒，已降级为固定增益」。
+  ///
+  /// 这里是打开开关 / 冷启动恢复 / audioSession 变化 / 增益调整等所有下发的
+  /// 唯一汇合点。AGC 用 Visualizer 测量实时响度，而 Visualizer 需要
+  /// RECORD_AUDIO；必须在下发 autoGain=true 之前确保权限，否则原生会直接
+  /// skip，UI 却仍显示「自动适配」，形成开关已开却无实时增益的假成功。
+  /// 权限已授予时缓存命中，切歌等高频调用零 platform channel 往返、不卡顿。
+  Future<bool> _applyVolumeNormalization() async {
+    if (!isAudioEffectsSupported) return true;
+
+    var useAuto = volumeNormalizationEnabled &&
+        volumeGainMode == VolumeGainMode.auto;
+    var downgraded = false;
+    if (useAuto) {
+      final granted = await _ensureRecordAudioPermission();
+      if (!granted) {
+        // 不让 auto 假生效：内存状态、持久化、UI 与原生保持一致地回退 fixed，
+        // 静态增益补偿照常工作，音效不失效。
+        useAuto = false;
+        downgraded = true;
+        volumeGainMode = VolumeGainMode.fixed;
+        agcStatus = null;
+        notifyListeners();
+        await _persistVolumeGainMode(VolumeGainMode.fixed);
+      }
     }
 
-    final useAuto = volumeNormalizationEnabled &&
-        volumeGainMode == VolumeGainMode.auto;
     await _audioEffects.configureVolumeNormalization(
       audioSessionId:
           _androidAudioSessionId ?? audioPlayer.androidAudioSessionId,
@@ -3102,6 +3152,7 @@ class PlayerController extends ChangeNotifier {
     } else {
       agcStatus = null;
     }
+    return !downgraded;
   }
 
   void _syncListeningTimeTracker() {

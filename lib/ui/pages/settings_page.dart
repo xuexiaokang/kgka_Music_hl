@@ -575,7 +575,13 @@ class SettingsPage extends StatelessWidget {
                       title: '音量均衡',
                       subtitle: '降低各首歌曲音量差异，自动控制音量',
                       value: player.volumeNormalizationEnabled,
-                      onChanged: player.setVolumeNormalizationEnabled,
+                      onChanged: (value) async {
+                        final ok =
+                            await player.setVolumeNormalizationEnabled(value);
+                        if (!ok) {
+                          Toast.error('未获得录音权限，已回退固定增益模式');
+                        }
+                      },
                     ),
                     if (player.volumeNormalizationEnabled) ...[
                       _SettingsTile(
