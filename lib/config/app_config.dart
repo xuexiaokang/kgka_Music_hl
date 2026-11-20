@@ -4,7 +4,7 @@ class AppConfig {
   const AppConfig._();
 
   static const appName = '九九音乐';
-  static const appVersion = '2026.11.20';
+  static const appVersion = '2026.11.21';
   static const appVersionCode = '20282';
 
   static const _defaultApiBaseUrl = 'https://music.api.hoilai.cn';
