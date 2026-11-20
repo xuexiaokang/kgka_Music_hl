@@ -22,12 +22,13 @@
 
 ---
 
-## 2. 当前状态快照（2026-11-20，v2026.11.20.2 发布中）
+## 2. 当前状态快照（2026-11-20，v2026.11.20.2 已发版）
 
 ```
-HEAD   = 本次发版提交（四轮 AGC 修复 + 复审收口 + 版本号 20281）
-origin = 已同步；tag v2026.11.20.2 / Release 创建中（发布完成后补 id 与 tag object SHA）
-Release = v2026.11.20.2（versionCode 20281，资产 app-release.apk 26,500,897 B，md5 c4d60dbf…，latest）
+HEAD   = dff23b3 fix(audio): 音量均衡 AGC 四轮修复与复审收口（v2026.11.20.2）
+         （tag 锚在 dff23b3；其后的文档收尾提交另算，不打 tag）
+origin = 已同步（0 未 push）；tag v2026.11.20.2（annotated, a3e2ff4e→dff23b3）
+Release = v2026.11.20.2（id 452385977，正文 1712 字符，资产 app-release.apk 26,500,897 B，md5 c4d60dbf…，latest）
          上两版 v2026.11.20（id 451755386）/ v2026.11.20.1（id 452112971）保持不变
 upstream/master = 落后 0（本 fork 领先；push 仍为 no_push，不可 squash——§7.3）
 pubspec = version: 2026.11.20+20281
@@ -46,7 +47,8 @@ pubspec = version: 2026.11.20+20281
 - 发版素材：`build/commit_msg.txt`（提交说明）与 `build/release_body.md`（Release 正文，markdown：四轮修复表格 + 复审三处缺陷 + 红线 + 验证 + 版本说明，如实标注「真车机逐曲听感仍未实测」）；两者在 `/build/` 忽略目录，不入库。
 - 流程（§6）：先 push master → Git Data API 两步建 annotated tag `v2026.11.20.2`（tag object + ref）→ Release API 建 Release 并带 markdown 正文 → `uploads.github.com` 上传 `app-release.apk` → 核对 latest 与资产 md5。tag 锚在功能提交，文档收尾另起一个提交（与 `v2026.11.20.1` 同）。
 - 历史节标题中的「未发版，工作区未提交」是当时状态的如实记录，不逐一改写；统一以本节为准。
-- 状态：**发布中**；tag object SHA / Release id / 资产校验结果待发布完成后补记。
+- **发布结果**：annotated tag object `a3e2ff4ec5b20c770e6503ca2accf790edec702c` → `refs/tags/v2026.11.20.2`（指向 `dff23b3`）；Release **id `452385977`**，https://github.com/xuexiaokang/kgka_Music_hl/releases/tag/v2026.11.20.2 ，正文 1712 字符 markdown、`draft=false` / `prerelease=false` / `make_latest=true`；资产 id `770882549`，`app-release.apk` 26,500,897 B、`state=uploaded`、服务端 `digest=sha256:68d93616aca4e8033e99f1abbe8d1c769767ad72a9f0f700ace6b67db0fe47ce`；`GET /releases/latest` 返回 `v2026.11.20.2` ✅。本地 md5 `c4d60dbf…` 与字节数一致。
+- 状态：**已发版**（功能提交 `dff23b3` + 文档收尾提交；tag 锚在 `dff23b3`，与 v2026.11.20.1 同构）。真车机逐曲听感仍未实测。
 
 **2026-11-20 续四：复审发现的真实缺陷与文档失真一次修正（未发版，工作区未提交）**
 
@@ -501,7 +503,7 @@ sleep 8; "$MM" sh -v 1 --cmd "input tap 190 260"   # 点迷你播放器封面 �
 
 ## 10. 待办与已知问题
 
-- [x] ~~发版 20281~~：**已于 2026-11-20 发布**（同日修订版二 tag `v2026.11.20.2`，versionCode 20281，资产 md5 `c4d60dbf…`；tag object SHA / Release id 见续五节补记）。因 `v2026.11.20`、`v2026.11.20.1` tag/Release 已占用且按 §7.3 不得改写已发布历史，故新建 `v2026.11.20.2`，上两版保持不动。
+- [x] ~~发版 20281~~：**已于 2026-11-20 发布**（同日修订版二 tag `v2026.11.20.2`，tag object `a3e2ff4e`，Release id `452385977`，versionCode 20281，资产 md5 `c4d60dbf…`，latest）。因 `v2026.11.20`、`v2026.11.20.1` tag/Release 已占用且按 §7.3 不得改写已发布历史，故新建 `v2026.11.20.2`，上两版保持不动。
 - [x] ~~发版 20280~~：**已于 2026-11-20 发布**（同日修订版 tag `v2026.11.20.1`，Release id 452112971，HEAD `2cb77ce`，正文 900 字符带 markdown，资产 md5 `9a19172c…`）。因 `v2026.11.20` tag/Release 已占用且按 §7.3 不得改写已发布历史，故新建同日修订版 tag，上一版保持不动。
 - [x] ~~下次发版 20265~~：**已于 2026-10-31 发布**（tag `v2026.10.31`，Release id 429646924，正文带 markdown）。
 - [x] ~~下次发版 20273~~：**已于 2026-11-20 发布**（tag `v2026.11.20`，Release id 451755386，HEAD `f5a14df`，versionCode 20279，正文带 markdown）。以下为当时的发版清单，留作历史记录。含此前 20267 的全部 ①全屏页渲染节流（`d02b51d`，§3.5）②两批上游合并（收藏/排行榜/R8/打断修复/蓝牙防外放/下载元数据）③R8 裁剪 ④车机全屏差集 5 项功能（`79b6ccc`）⑤音量均衡恢复增益补偿 +3dB（`02c8bed`）⑥可调音量增益 0~+12dB（`5e6756d`）⑦实时响度自动增益 AGC（`6469f47`）⑧AGC 设置菜单假死修复（`c1b8967`）⑨auto/fixed 策略切换卡顿优化（`5bec594`）⑩实时增益自动轮询（`9ea8b4a`）⑪自动增益方向错乱修复（`df0a18e`）⑫**官方 PEAK_RMS 测量替换 8bit 波形手算**（`c1c2cbf`，测得值准确性根治，MuMu 日志实测验证）。剩：真车机实测过门（含 AGC 逐曲听感与削顶、菜单连点、策略切换手感、轮询数值变化、响/轻歌增益方向） → 打 tag `v2026.11.20` → 用本地 APK（md5 `663f1786…`）发 Release。**发版门（历史表述，语义已过时）：真车机实测悬浮视频流畅 + 来电/蓝牙断开行为 + AGC 自动增益听感（现行语义为「偏轻的歌补增益、正常/偏响的歌保持原样」，非「响歌减增益」）+ 设置菜单不假死 + 策略切换不卡顿 + 轮询刷新数值**。注：真车机逐曲听感仍未实测，MuMu 已覆盖安装、效果链与 AGC 日志实证。
