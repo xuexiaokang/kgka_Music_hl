@@ -51,7 +51,7 @@ class CarPlayerActivity : Activity() {
     // [CASSETTE_EXPERIMENT] 实验性磁带视图：单击盘图在「黑胶 / 磁带」间切换。
     // showCassette 必须是字段——buildDisc() 会在尺寸变化时重建视图，需据此恢复形态。
     private var cassetteView: CarCassetteView? = null
-    private var showCassette = false
+    private var showCassette = true
     private lateinit var headerTitle: TextView
     private lateinit var headerArtist: TextView
     private lateinit var titleText: TextView
@@ -238,9 +238,9 @@ class CarPlayerActivity : Activity() {
         window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         window.statusBarColor = Color.TRANSPARENT
         window.navigationBarColor = Color.TRANSPARENT
-        // [CASSETTE_EXPERIMENT] 恢复上次选择的盘面形态（默认黑胶）
+        // [CASSETTE_EXPERIMENT] 恢复上次选择的盘面形态（默认磁带）
         showCassette = getSharedPreferences(PREF_NAME, MODE_PRIVATE)
-            .getBoolean(PREF_SHOW_CASSETTE, false)
+            .getBoolean(PREF_SHOW_CASSETTE, true)
         // 车机界面缩放：必须在 buildUi 之前生效（dp/sp 随 density 全局缩放）
         applyUiScale(resolveUiScale())
         buildUi()
