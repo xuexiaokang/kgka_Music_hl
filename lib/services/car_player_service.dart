@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 
 import '../controllers/auth_controller.dart';
 import '../controllers/player_controller.dart';
+import '../controllers/theme_controller.dart';
 import '../models/music_models.dart';
 
 /// 全原生车机播放器的 Dart 侧控制器。
@@ -121,6 +122,9 @@ class CarPlayerService {
       'canLike': isKugou,
       'isKugou': isKugou,
       'songHash': s?.hash ?? '',
+      // 车机界面缩放档位：原生全屏页据此全局放大 dp/sp（此前该档位只影响
+      // Flutter 分栏页，原生接管的全屏不生效，高分屏下内容偏小）
+      'uiScale': ThemeController.instance.carModeScale,
       // 上游车机播放页菜单的能力开关，供原生「更多」面板决定是否显示磁贴
       'canComment': s != null && _supportsComments(s),
       'canAddToPlaylist': isKugou,
@@ -174,6 +178,7 @@ class CarPlayerService {
       'isPlaying': p.isPlaying,
       'isBuffering': p.isBuffering,
       'isPreparing': p.isPreparing,
+      'isCompleted': p.isCompleted,
       'playMode': p.playbackMode.index,
       'isLiked': (_auth != null && s != null) ? _auth!.isLiked(s) : false,
     };

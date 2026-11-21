@@ -443,7 +443,9 @@ class PlayerController extends ChangeNotifier {
     _desktopLyrics.setVisibilityChangedHandler(_handleDesktopLyricsVisibility);
     _positionSub = audioPlayer.positionStream.listen((value) {
       if (!_isSeeking) {
-        _setPositionBase(value, playing: isPlaying);
+        // 缓冲期间时钟必须停走：否则 smoothPosition 会按墙钟虚增，
+        // 磁带卷盘/进度条在卡顿时抢先走完，恢复后又回跳（与真实播放脱节）。
+        _setPositionBase(value, playing: isPlaying && !isBuffering);
       }
       _maybeCompleteFromPosition(value);
       _maybeStopClimaxPreview(value);
@@ -471,7 +473,8 @@ class PlayerController extends ChangeNotifier {
           value.processingState == ProcessingState.loading ||
           value.processingState == ProcessingState.buffering;
       if (!_isSeeking) {
-        _setPositionBase(audioPlayer.position, playing: isPlaying);
+        // 同上：缓冲时按暂停处理，时钟停走，位置锚定在真实播放位置。
+        _setPositionBase(audioPlayer.position, playing: isPlaying && !isBuffering);
       }
       _syncListeningTimeTracker();
       _syncDesktopPlayState();
@@ -652,6 +655,10 @@ class PlayerController extends ChangeNotifier {
   bool isPlaying = false;
   bool isBuffering = false;
   bool isPreparing = false;
+  /// 当前歌曲是否已自然播放完毕（processingState=completed）。
+  /// 车机原生页据此把磁带卷盘/进度推到终点，保证"歌结束=带走到头"。
+  bool get isCompleted =>
+      audioPlayer.processingState == ProcessingState.completed;
   bool _isChangingSource = false;
   bool addListeningTimeEnabled = true;
   bool keepScreenOnEnabled = false;

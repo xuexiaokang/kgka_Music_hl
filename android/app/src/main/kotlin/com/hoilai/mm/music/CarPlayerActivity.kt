@@ -48,6 +48,10 @@ class CarPlayerActivity : Activity() {
     private lateinit var discWrap: FrameLayout
     private lateinit var discGroup: FrameLayout
     private var disc: ImageView? = null
+    // [CASSETTE_EXPERIMENT] 实验性磁带视图：单击盘图在「黑胶 / 磁带」间切换。
+    // showCassette 必须是字段——buildDisc() 会在尺寸变化时重建视图，需据此恢复形态。
+    private var cassetteView: CarCassetteView? = null
+    private var showCassette = false
     private lateinit var headerTitle: TextView
     private lateinit var headerArtist: TextView
     private lateinit var titleText: TextView
@@ -121,6 +125,9 @@ class CarPlayerActivity : Activity() {
     companion object {
         private const val PREF_NAME = "car_player_prefs"
         private const val PREF_LYRIC_SCALE = "lyric_scale"
+        private const val PREF_UI_SCALE = "ui_scale"
+        // [CASSETTE_EXPERIMENT] 形态持久化 key（删除实验功能时一并移除）
+        private const val PREF_SHOW_CASSETTE = "show_cassette"
         // 与 CarPlayerService._styles() 保持一致的基准字号，缩放时按比例重算
         private val LYRIC_SCALES = floatArrayOf(0.85f, 1.0f, 1.15f, 1.3f, 1.5f)
     }
@@ -148,7 +155,9 @@ class CarPlayerActivity : Activity() {
         override fun run() {
             // 自停时同步复位标志，避免 stopClock 未走到时 startClock 误判为“已在运行”
             if (!playing || isFinishing) { clockStarted = false; return }
-            val cur = currentMs()
+            // 缓冲期间真实播放位置不走（Dart 侧时钟已停），锚点插值必须同步冻结，
+            // 否则磁带卷盘/进度条会按墙钟虚走，缓冲恢复后回跳（与歌不同步）。
+            val cur = if (buffering) anchorPosMs else currentMs()
             // 进度条/时间只到秒精度：秒未变就不碰它，避免无谓的 invalidate
             val sec = cur / 1000
             if (!seekDragging && sec != lastShownSec) {
@@ -159,6 +168,8 @@ class CarPlayerActivity : Activity() {
             }
             if (!lyricView.userInteracting) lyricView.setProgress(cur)
             stepRotation()
+            // [CASSETTE_EXPERIMENT] 磁带卷轴与卷径由同一 tick 的绝对进度驱动，不额外起帧
+            cassetteView?.setProgress(cur, durationMs)
             if (playing) tickHandler.postDelayed(this, tickMs)
         }
     }
@@ -177,11 +188,58 @@ class CarPlayerActivity : Activity() {
 
     private fun dp(v: Float) = (v * resources.displayMetrics.density)
 
+    // ---- 车机界面缩放：Flutter「车机界面缩放」档位（theme.car_mode_scale） ----
+    // 此前该档位只作用于 Flutter 渲染的分栏页（textScaler），原生接管的全屏页
+    // 全部尺寸硬编码 sp/dp，高分屏低密度下内容偏小且档位无效。
+    // 做法：buildUi 前把 Activity Resources 的 density/scaledDensity 按档位放大，
+    // dp()/textSize(sp) 全部随之缩放（磁带视图按 View 尺寸自适应，不受影响）。
+    private var uiScale = 1.15f
+    private var baseDensity = 0f
+    private var baseScaledDensity = 0f
+    private var baseDensityDpi = 0
+
+    private fun applyUiScale(scale: Float) {
+        uiScale = scale.coerceIn(0.85f, 1.5f)
+        val dm = resources.displayMetrics
+        if (baseDensity <= 0f) {
+            baseDensity = dm.density
+            baseScaledDensity = dm.scaledDensity
+            baseDensityDpi = dm.densityDpi
+        }
+        // 自动密度归一：车机屏常是「高物理分辨率 + 低系统密度」（如 2560×1440@160dpi），
+        // 同样的 dp 在这类屏上内容占比只有 720p 基准的一半。按「短边逻辑尺寸 / 720dp」
+        // 等比归一，让任何分辨率下内容占比与基准 1280×720@1x 一致；
+        // 用户档位再在其上微调。
+        val shortDp = minOf(dm.widthPixels, dm.heightPixels) / baseDensity
+        val auto = (shortDp / 720f).coerceIn(0.75f, 2.0f)
+        val total = (uiScale * auto).coerceIn(0.6f, 3.0f)
+        dm.density = baseDensity * total
+        dm.scaledDensity = baseScaledDensity * total
+        dm.densityDpi = (baseDensityDpi * total).toInt().coerceAtLeast(120)
+    }
+
+    /** 从 open 快照 / 上次持久化档位取缩放值并持久化（buildUi 前调用）。 */
+    private fun resolveUiScale(): Float {
+        val snap = ((CarPlayerBridge.snapshot?.get("meta")) as? Map<*, *>)
+            ?.get("uiScale") as? Number
+        val saved = getSharedPreferences(PREF_NAME, MODE_PRIVATE)
+            .getFloat(PREF_UI_SCALE, 1.15f)
+        val scale = ((snap?.toFloat() ?: saved)).coerceIn(0.85f, 1.5f)
+        getSharedPreferences(PREF_NAME, MODE_PRIVATE).edit()
+            .putFloat(PREF_UI_SCALE, scale).apply()
+        return scale
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         window.statusBarColor = Color.TRANSPARENT
         window.navigationBarColor = Color.TRANSPARENT
+        // [CASSETTE_EXPERIMENT] 恢复上次选择的盘面形态（默认黑胶）
+        showCassette = getSharedPreferences(PREF_NAME, MODE_PRIVATE)
+            .getBoolean(PREF_SHOW_CASSETTE, false)
+        // 车机界面缩放：必须在 buildUi 之前生效（dp/sp 随 density 全局缩放）
+        applyUiScale(resolveUiScale())
         buildUi()
         setDefaultBackground()
 
@@ -430,11 +488,14 @@ class CarPlayerActivity : Activity() {
 
         setContentView(root)
 
-        // 唱片在首帧按左栏实际尺寸构建（用户要求整体缩小 20%：系数 0.9→0.72、上限 440→352、下限 150→120）
+        // 盘面在首帧按左栏实际尺寸构建。
+        // 黄金尺寸：盘面面积 : 周围留白面积 = φ : 1（面积域黄金分割）
+        //   ⇒ S = min(w,h)·√(φ/(1+φ)) = √0.618 ≈ 0.786（原 0.72 偏小，+9%）
+        // 上限 352→400dp 同步放宽，避免横屏大屏下被钳制吃掉黄金比例
         discWrap.addOnLayoutChangeListener { v, _, _, _, _, _, _, _, _ ->
             val w = v.width; val h = v.height
             if (w <= 0 || h <= 0) return@addOnLayoutChangeListener
-            val sizePx = (minOf(w, h) * 0.72f).coerceIn(dp(120f), dp(352f)).toInt()
+            val sizePx = (minOf(w, h) * 0.786f).coerceIn(dp(120f), dp(400f)).toInt()
             if (sizePx != lastDiscSize) { lastDiscSize = sizePx; buildDisc(sizePx) }
         }
     }
@@ -486,38 +547,61 @@ class CarPlayerActivity : Activity() {
     private fun buildDisc(sizePx: Int) {
         discWrap.removeAllViews()
 
-        // 旋转组：黑胶盘体(细密纹路位图) + 中心圆形封面。沟槽是径向对称的，
-        // 所以旋转时只有封面看得出在转，符合网易云观感。
-        discGroup = FrameLayout(this)
+        // [CASSETTE_EXPERIMENT] BEGIN —— 黑胶 / 磁带二选一，删除时移除本 if 分支的磁带侧即可
+        if (showCassette) {
+            // 仍初始化 discGroup 占位：startRotation/stepRotation 的 ::discGroup 守卫依赖它，
+            // 磁带形态下不 addView、不设硬件层，转动完全由 setProgress 从绝对进度驱动。
+            discGroup = FrameLayout(this)
+            disc = null
+            val cassette = CarCassetteView(this)
+            cassetteView = cassette
+            discWrap.addView(cassette, FrameLayout.LayoutParams(sizePx, sizePx, Gravity.CENTER))
+        } else {
+            cassetteView = null
+            // 旋转组：黑胶盘体(细密纹路位图) + 中心圆形封面。沟槽是径向对称的，
+            // 所以旋转时只有封面看得出在转，符合网易云观感。
+            discGroup = FrameLayout(this)
 
-        val vinyl = ImageView(this).apply {
-            setImageBitmap(makeVinylBitmap(sizePx))
-            scaleType = ImageView.ScaleType.FIT_XY
+            val vinyl = ImageView(this).apply {
+                setImageBitmap(makeVinylBitmap(sizePx))
+                scaleType = ImageView.ScaleType.FIT_XY
+            }
+            discGroup.addView(vinyl, FrameLayout.LayoutParams(sizePx, sizePx, Gravity.CENTER))
+
+            val cover = ImageView(this).apply {
+                // 圆形封面在位图里预抗锯齿(circleize)，故不再用 clipToOutline 硬裁(硬裁边缘有锯齿)
+                // 不再单独设硬件层：旋转组整体已设层，组内再套层会多一次离屏合成
+                scaleType = ImageView.ScaleType.FIT_XY
+            }
+            disc = cover
+            val coverSize = (sizePx * 0.585f).toInt()
+            discGroup.addView(cover, FrameLayout.LayoutParams(coverSize, coverSize, Gravity.CENTER))
+
+            discWrap.addView(discGroup, FrameLayout.LayoutParams(sizePx, sizePx, Gravity.CENTER))
+
+            // 静态光泽层(不随盘旋转):大尺度方向光感 + 外缘斜面受光亮弧
+            val conicSheen = ImageView(this).apply {
+                setImageBitmap(makeSheenBitmap(sizePx))
+                scaleType = ImageView.ScaleType.FIT_XY
+            }
+            discWrap.addView(conicSheen, FrameLayout.LayoutParams(sizePx, sizePx, Gravity.CENTER))
         }
-        discGroup.addView(vinyl, FrameLayout.LayoutParams(sizePx, sizePx, Gravity.CENTER))
-
-        val cover = ImageView(this).apply {
-            // 圆形封面在位图里预抗锯齿(circleize)，故不再用 clipToOutline 硬裁(硬裁边缘有锯齿)
-            // 不再单独设硬件层：旋转组整体已设层，组内再套层会多一次离屏合成
-            scaleType = ImageView.ScaleType.FIT_XY
-        }
-        disc = cover
-        val coverSize = (sizePx * 0.585f).toInt()
-        discGroup.addView(cover, FrameLayout.LayoutParams(coverSize, coverSize, Gravity.CENTER))
-
-        discWrap.addView(discGroup, FrameLayout.LayoutParams(sizePx, sizePx, Gravity.CENTER))
-
-        // 静态光泽层(不随盘旋转):大尺度方向光感 + 外缘斜面受光亮弧
-        val conicSheen = ImageView(this).apply {
-            setImageBitmap(makeSheenBitmap(sizePx))
-            scaleType = ImageView.ScaleType.FIT_XY
-        }
-        discWrap.addView(conicSheen, FrameLayout.LayoutParams(sizePx, sizePx, Gravity.CENTER))
+        // [CASSETTE_EXPERIMENT] END
 
         // 左右滑动切歌（对齐 Flutter _LandscapeArtworkShowcase.onHorizontalDragEnd）
         val discGesture = android.view.GestureDetector(this,
             object : android.view.GestureDetector.SimpleOnGestureListener() {
                 override fun onDown(e: android.view.MotionEvent) = true
+                // [CASSETTE_EXPERIMENT] 长按盘图切换黑胶 / 磁带（单击不再切换，避免误触）；
+                // 左右滑动切歌保持不变
+                override fun onLongPress(e: android.view.MotionEvent) {
+                    showCassette = !showCassette
+                    // [CASSETTE_EXPERIMENT] 持久化形态，下次进入车机全屏保持选择
+                    getSharedPreferences(PREF_NAME, MODE_PRIVATE).edit()
+                        .putBoolean(PREF_SHOW_CASSETTE, showCassette).apply()
+                    stopRotation()
+                    if (lastDiscSize > 0) buildDisc(lastDiscSize)
+                }
                 override fun onFling(
                     e1: android.view.MotionEvent?, e2: android.view.MotionEvent,
                     vx: Float, vy: Float
@@ -534,7 +618,9 @@ class CarPlayerActivity : Activity() {
 
         // 换歌后封面图重挂到新的 disc；恢复旋转动画与当前封面
         coverUrl?.let { loadCover(it) }
-        if (playing) startRotation()
+        // [CASSETTE_EXPERIMENT] 磁带形态下黑胶旋转不启动；进度/封面由 tick 与 loadCover 喂给磁带 View
+        if (playing && !showCassette) startRotation()
+        cassetteView?.setProgress(currentMs(), durationMs)
     }
 
     /** 生成网易云风黑胶盘体位图(2x 超采样防摩尔纹;只画径向对称元素——底色/沟槽/暗侧面,随盘旋转)。 */
@@ -1358,6 +1444,15 @@ class CarPlayerActivity : Activity() {
 
     fun onMeta(m: Map<*, *>?) {
         if (m == null) return
+        // 车机界面缩放档位：即时持久化，下次进入全屏（重建 Activity）生效；
+        // 档位只能在 Flutter 设置页修改，那时原生页已 dismiss，实际总会重建。
+        (m["uiScale"] as? Number)?.let {
+            val s = it.toFloat().coerceIn(0.85f, 1.5f)
+            if (kotlin.math.abs(s - uiScale) > 0.001f) {
+                getSharedPreferences(PREF_NAME, MODE_PRIVATE).edit()
+                    .putFloat(PREF_UI_SCALE, s).apply()
+            }
+        }
         val t = (m["title"] as? String) ?: ""
         val a = (m["artist"] as? String) ?: ""
         titleText.text = t
@@ -1411,8 +1506,12 @@ class CarPlayerActivity : Activity() {
 
     fun onSync(m: Map<*, *>?) {
         if (m == null) return
-        val pos = (m["positionMs"] as? Number)?.toLong() ?: anchorPosMs
+        var pos = (m["positionMs"] as? Number)?.toLong() ?: anchorPosMs
         durationMs = (m["durationMs"] as? Number)?.toLong() ?: durationMs
+        // 歌已自然播完：位置推到时长终点。播放器 completed 时上报的位置可能
+        // 略小于 durationMs（末帧/预卷差），不推终点磁带卷盘会停在差一点的位置。
+        val completed = (m["isCompleted"] as? Boolean) ?: false
+        if (completed && durationMs > 0) pos = durationMs
         playing = (m["isPlaying"] as? Boolean) ?: playing
         buffering = (m["isBuffering"] as? Boolean) ?: buffering
         (m["playMode"] as? Number)?.let { setPlayMode(it.toInt()) }
@@ -1516,7 +1615,10 @@ class CarPlayerActivity : Activity() {
     private fun currentMs(): Long {
         if (!playing) return anchorPosMs
         val d = android.os.SystemClock.elapsedRealtime() - anchorUptime
-        return anchorPosMs + d
+        // 夹在时长内：同步间隔期间墙钟插值可能超出时长（歌已到尾、下一首 sync 未到），
+        // 不夹会让卷盘 p 提前到 1 又无所谓，但时间文本会越界跳动。
+        val v = anchorPosMs + d
+        return if (durationMs > 0 && v > durationMs) durationMs else v
     }
 
     private fun startRotation() {
@@ -1656,7 +1758,13 @@ class CarPlayerActivity : Activity() {
     private fun loadCover(url: String?) {
         val token = ++coverToken
         if (url.isNullOrBlank()) {
-            runOnUiThread { if (token == coverToken) disc?.setImageDrawable(null) }
+            runOnUiThread {
+                if (token == coverToken) {
+                    disc?.setImageDrawable(null)
+                    // [CASSETTE_EXPERIMENT] 磁带标签清空封面
+                    cassetteView?.setAlbumArt(null)
+                }
+            }
             return
         }
         Thread {
@@ -1679,6 +1787,8 @@ class CarPlayerActivity : Activity() {
                             if (token == coverToken) {
                                 disc?.setImageBitmap(circle)
                                 bgImage.setImageBitmap(blurred)
+                                // [CASSETTE_EXPERIMENT] 标签用未圆化的原图，恰好填充方形纸标
+                                cassetteView?.setAlbumArt(bmp)
                             }
                         }
                     }
