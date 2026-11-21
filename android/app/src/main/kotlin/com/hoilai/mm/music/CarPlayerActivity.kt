@@ -393,7 +393,8 @@ class CarPlayerActivity : Activity() {
             thumb = resources.getDrawable(R.drawable.kg_seek_thumb, null)
             thumbOffset = dp(5f).toInt()
             splitTrack = false
-            setPadding(0, dp(8f).toInt(), 0, dp(8f).toInt())
+            // 左右留出滑块半径，避免 0%/100% 时圆心贴边被裁一半
+            setPadding(dp(4f).toInt(), dp(8f).toInt(), dp(4f).toInt(), dp(8f).toInt())
             setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
                 override fun onProgressChanged(sb: SeekBar?, p: Int, fromUser: Boolean) {
                     if (fromUser) elapsedText.text = fmt(p.toLong())
@@ -1601,7 +1602,7 @@ class CarPlayerActivity : Activity() {
         val place = Runnable {
             val w = seek.width
             if (w <= 0) { seek.post { positionClimaxDot() }; return@Runnable }
-            val pad = seek.thumbOffset.toFloat()
+            val pad = seek.paddingLeft.toFloat()
             val frac = (climaxStartMs.toFloat() / durationMs).coerceIn(0f, 1f)
             val x = (pad + frac * (w - 2 * pad) - dp(4f)).toInt().coerceIn(0, w - climaxDot.width)
             (climaxDot.layoutParams as FrameLayout.LayoutParams).leftMargin = x
