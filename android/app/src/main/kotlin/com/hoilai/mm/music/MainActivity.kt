@@ -1540,11 +1540,19 @@ class MainActivity : AudioServiceActivity() {
         startActivity(installIntent)
     }
 
-    /// 是否为 Android Automotive 车机设备。
-    /// 仅依赖官方 FEATURE_AUTOMOTIVE 标记：国产定制 AOSP 车机通常未声明，
-    /// 会判为 false，需用户在设置→个性化手动开启车机模式。
+    /// 是否为车机设备。
+    /// 三重判据（任一命中即车机）：
+    /// 1. 官方 FEATURE_AUTOMOTIVE（android.hardware.type.automotive，真 Automotive 车机）；
+    /// 2. 系统以 UI_MODE_TYPE_CAR 类型运行（国产定制 AOSP 车机 ROM 常见，未声明系统 feature）；
+    /// 3. FEATURE_CAR（部分老车机/盒子声明此标记）。
+    /// 全部未命中（手机/平板/模拟器）判为 false，需用户手动开启车机模式。
     private fun isAutomotiveDevice(): Boolean {
-        return packageManager.hasSystemFeature(PackageManager.FEATURE_AUTOMOTIVE)
+        val pm = packageManager
+        if (pm.hasSystemFeature(PackageManager.FEATURE_AUTOMOTIVE)) return true
+        if (pm.hasSystemFeature("android.hardware.type.car")) return true
+        val uiModeType = resources.configuration.uiMode and android.content.res.Configuration.UI_MODE_TYPE_MASK
+        if (uiModeType == android.content.res.Configuration.UI_MODE_TYPE_CAR) return true
+        return false
     }
 
     private fun getAlbumArtBytes(albumId: Long): ByteArray? {
