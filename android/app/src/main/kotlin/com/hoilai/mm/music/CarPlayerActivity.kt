@@ -391,10 +391,12 @@ class CarPlayerActivity : Activity() {
             maxHeight = dp(3f).toInt()
             progressDrawable = resources.getDrawable(R.drawable.kg_seek_track, null)
             thumb = resources.getDrawable(R.drawable.kg_seek_thumb, null)
-            thumbOffset = dp(5f).toInt()
+            // 滑块 drawable 实际是 24dp 光晕域（8dp 圆核心 + 8dp inset）：
+            // offset/padding = 域半径 12dp，0%/100% 时圆心恰对轨道端点，
+            // 光晕与圆都不会越出视图被裁（此前 offset 5dp > padding 4dp 左端仍裁 1dp）。
+            thumbOffset = dp(12f).toInt()
             splitTrack = false
-            // 左右留出滑块半径，避免 0%/100% 时圆心贴边被裁一半
-            setPadding(dp(4f).toInt(), dp(8f).toInt(), dp(4f).toInt(), dp(8f).toInt())
+            setPadding(dp(12f).toInt(), 0, dp(12f).toInt(), 0)
             setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
                 override fun onProgressChanged(sb: SeekBar?, p: Int, fromUser: Boolean) {
                     if (fromUser) elapsedText.text = fmt(p.toLong())

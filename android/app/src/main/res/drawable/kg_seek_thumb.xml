@@ -1,4 +1,24 @@
-<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="oval">
-    <solid android:color="#FFFFFFFF"/>
-    <size android:width="8dp" android:height="8dp"/>
-</shape>
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 车机进度条滑块：8dp 白色圆核心 + 24dp 按压光晕域（Ripple 以触点扩散，
+     与普通横屏 Flutter 进度条的按压光晕观感一致）。inset 让可点/光晕域
+     大于可见圆；mask 保证光晕是圆形而非方形。 -->
+<ripple xmlns:android="http://schemas.android.com/apk/res/android"
+    android:color="#4DFFFFFF">
+    <item android:id="@android:id/mask">
+        <shape android:shape="oval">
+            <solid android:color="#FFFFFFFF"/>
+        </shape>
+    </item>
+    <item>
+        <inset
+            android:insetLeft="8dp"
+            android:insetTop="8dp"
+            android:insetRight="8dp"
+            android:insetBottom="8dp">
+            <shape android:shape="oval">
+                <solid android:color="#FFFFFFFF"/>
+                <size android:width="8dp" android:height="8dp"/>
+            </shape>
+        </inset>
+    </item>
+</ripple>

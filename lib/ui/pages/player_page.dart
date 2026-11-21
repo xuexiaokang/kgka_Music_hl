@@ -1767,21 +1767,26 @@ class _PosterPlayerPageState extends State<_PosterPlayerPage>
                 // 矮屏没有歌词预览区，评论入口同样要保留，否则会找不到。
                 _CommentEntry(player: widget.player, song: widget.song),
               ] else ...[
-                // 常规竖屏/横屏：保持原有固定尺寸布局
-                const Spacer(),
-                ConstrainedBox(
-                  constraints: BoxConstraints(maxWidth: artworkMaxWidth),
-                  child: AspectRatio(
-                    aspectRatio: 1,
-                    child: GestureDetector(
-                      behavior: HitTestBehavior.opaque,
-                      onTap: () => _openMoreMenu(context),
-                      child: Hero(
-                        tag: 'player_cover',
-                        child: SongArtwork(
-                          song: widget.song,
-                          size: double.infinity,
-                          borderRadius: 8,
+                // 常规竖屏/横屏：保持原有固定尺寸布局。
+                // 横屏 460~620dp 高度区间若仍用固定尺寸封面会 Column 溢出，
+                // 底部进度/控制行被 PageView 裁掉——封面区改为弹性缩放兜底。
+                Expanded(
+                  child: Center(
+                    child: FittedBox(
+                      fit: BoxFit.scaleDown,
+                      child: SizedBox.square(
+                        dimension: artworkMaxWidth,
+                        child: GestureDetector(
+                          behavior: HitTestBehavior.opaque,
+                          onTap: () => _openMoreMenu(context),
+                          child: Hero(
+                            tag: 'player_cover',
+                            child: SongArtwork(
+                              song: widget.song,
+                              size: double.infinity,
+                              borderRadius: 8,
+                            ),
+                          ),
                         ),
                       ),
                     ),
@@ -1794,7 +1799,6 @@ class _PosterPlayerPageState extends State<_PosterPlayerPage>
                 ),
                 if (!compact) const SizedBox(height: 4),
                 _CommentEntry(player: widget.player, song: widget.song),
-                const Spacer(),
               ],
               _Progress(player: widget.player, bright: true),
               const SizedBox(height: 10),
