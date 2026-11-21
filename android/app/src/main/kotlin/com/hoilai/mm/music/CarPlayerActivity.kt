@@ -120,7 +120,7 @@ class CarPlayerActivity : Activity() {
     private var canComment = false          // 当前歌曲是否支持评论（酷狗/网易云）
     private var canAddToPlaylist = false   // 仅酷狗源支持添加到自建歌单
     private var songHash = ""              // 供 Flutter 侧从队列定位当前歌曲
-    private var lyricScale = 0.80f          // 歌词字号缩放档位（标准 0.80，原生 SharedPreferences 持久化）
+    private var lyricScale = 0.68f          // 歌词字号缩放档位（标准 0.68，原生 SharedPreferences 持久化）
 
     companion object {
         private const val PREF_NAME = "car_player_prefs"
@@ -129,10 +129,10 @@ class CarPlayerActivity : Activity() {
         // [CASSETTE_EXPERIMENT] 形态持久化 key（删除实验功能时一并移除）
         private const val PREF_SHOW_CASSETTE = "show_cassette"
         // 与 CarPlayerService._styles() 保持一致的基准字号，缩放时按比例重算
-        // （2026-11-22 调小：旧组整体 ×0.8，比例结构 85/100/115/130/150 保留；标准 = 0.80）
-        private val LYRIC_SCALES = floatArrayOf(0.68f, 0.80f, 0.92f, 1.04f, 1.20f)
-        private const val LYRIC_SCALE_STD = 0.80f
-        private const val PREF_LYRIC_SCALE_MIGRATED = "lyric_scale_v2_migrated"
+        // （2026-11-22 二次调小：v2 组整体 ×0.85，比例结构 85/100/115/130/150 保留；标准 = 0.68）
+        private val LYRIC_SCALES = floatArrayOf(0.58f, 0.68f, 0.78f, 0.88f, 1.02f)
+        private const val LYRIC_SCALE_STD = 0.68f
+        private const val PREF_LYRIC_SCALE_MIGRATED = "lyric_scale_v3_migrated"
     }
 
     // 队列底部弹窗主题色（对齐 Flutter showModalBottomSheet 的 colorScheme，默认浅色）
@@ -444,23 +444,23 @@ class CarPlayerActivity : Activity() {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER
         }
-        modeBtn = circleIconButton(R.drawable.ic_kg_mode_loop, 34f, 56f, 0) {
+        modeBtn = circleIconButton(R.drawable.ic_kg_mode_loop, 28f, 48f, 0) {
             wantModeToast = true; CarPlayerBridge.sendEvent("playMode")
         }
-        btnRow.addView(modeBtn, lp(dp(56f).toInt(), dp(56f).toInt()))
-        btnRow.addView(space(dp(24f).toInt(), 0))
+        btnRow.addView(modeBtn, lp(dp(48f).toInt(), dp(48f).toInt()))
+        btnRow.addView(space(dp(20f).toInt(), 0))
         btnRow.addView(
-            circleIconButton(R.drawable.ic_kg_prev, 54f, 72f, 0) { CarPlayerBridge.sendEvent("prev") },
-            lp(dp(72f).toInt(), dp(72f).toInt())
+            circleIconButton(R.drawable.ic_kg_prev, 44f, 60f, 0) { CarPlayerBridge.sendEvent("prev") },
+            lp(dp(60f).toInt(), dp(60f).toInt())
         )
-        btnRow.addView(space(dp(24f).toInt(), 0))
+        btnRow.addView(space(dp(20f).toInt(), 0))
         val playWrap = FrameLayout(this)
         playBtn = ImageButton(this).apply {
             setBackgroundResource(R.drawable.bg_circle_white18)
             setImageResource(R.drawable.ic_kg_play)
             setColorFilter(0xFFFFFFFF.toInt())
             scaleType = ImageView.ScaleType.FIT_CENTER
-            val pad = dp(12f).toInt()
+            val pad = dp(10f).toInt()
             setPadding(pad, pad, pad, pad)
             setOnClickListener { CarPlayerBridge.sendEvent("playPause") }
         }
@@ -468,21 +468,21 @@ class CarPlayerActivity : Activity() {
             isIndeterminate = true
             visibility = View.GONE
         }
-        playWrap.addView(playBtn, FrameLayout.LayoutParams(dp(96f).toInt(), dp(96f).toInt()))
+        playWrap.addView(playBtn, FrameLayout.LayoutParams(dp(80f).toInt(), dp(80f).toInt()))
         playWrap.addView(
             playProgress,
-            FrameLayout.LayoutParams(dp(42f).toInt(), dp(42f).toInt(), Gravity.CENTER)
+            FrameLayout.LayoutParams(dp(36f).toInt(), dp(36f).toInt(), Gravity.CENTER)
         )
-        btnRow.addView(playWrap, lp(dp(96f).toInt(), dp(96f).toInt()))
-        btnRow.addView(space(dp(24f).toInt(), 0))
+        btnRow.addView(playWrap, lp(dp(80f).toInt(), dp(80f).toInt()))
+        btnRow.addView(space(dp(20f).toInt(), 0))
         btnRow.addView(
-            circleIconButton(R.drawable.ic_kg_next, 54f, 72f, 0) { CarPlayerBridge.sendEvent("next") },
-            lp(dp(72f).toInt(), dp(72f).toInt())
+            circleIconButton(R.drawable.ic_kg_next, 44f, 60f, 0) { CarPlayerBridge.sendEvent("next") },
+            lp(dp(60f).toInt(), dp(60f).toInt())
         )
-        btnRow.addView(space(dp(24f).toInt(), 0))
+        btnRow.addView(space(dp(20f).toInt(), 0))
         btnRow.addView(
-            circleIconButton(R.drawable.ic_kg_queue, 34f, 56f, 0) { showQueue() },
-            lp(dp(56f).toInt(), dp(56f).toInt())
+            circleIconButton(R.drawable.ic_kg_queue, 28f, 48f, 0) { showQueue() },
+            lp(dp(48f).toInt(), dp(48f).toInt())
         )
         right.addView(btnRow, lpMatchWrap().also { it.topMargin = dp(4f).toInt() })
 
@@ -1391,10 +1391,14 @@ class CarPlayerActivity : Activity() {
      */
     private fun readLyricScale(): Float {
         val prefs = getSharedPreferences(PREF_NAME, MODE_PRIVATE)
-        var saved = prefs.getFloat(PREF_LYRIC_SCALE, 1.0f)
+        // 全新安装（从未写过档位）直接落标准档；老用户档位值一次性 ×0.85 迁移
+        var saved = if (prefs.contains(PREF_LYRIC_SCALE))
+            prefs.getFloat(PREF_LYRIC_SCALE, LYRIC_SCALE_STD) else LYRIC_SCALE_STD
         if (!prefs.getBoolean(PREF_LYRIC_SCALE_MIGRATED, false)) {
-            // 一次性迁移：旧档位（含默认 1.0）整体 ×0.8，旧选择意图按比例保留
-            saved *= 0.8f
+            if (prefs.contains(PREF_LYRIC_SCALE)) {
+                // 一次性迁移：v2 档位整体 ×0.85，旧选择意图按比例保留
+                saved *= 0.85f
+            }
             prefs.edit().putBoolean(PREF_LYRIC_SCALE_MIGRATED, true).apply()
         }
         val snapped = LYRIC_SCALES.minByOrNull { kotlin.math.abs(it - saved) } ?: LYRIC_SCALE_STD
@@ -1421,10 +1425,10 @@ class CarPlayerActivity : Activity() {
     private fun showLyricScaleSheet() {
         val rows = LYRIC_SCALES.map { sc ->
             val label = when (sc) {
-                0.68f -> "小"
+                0.58f -> "小"
                 LYRIC_SCALE_STD -> "标准"
-                0.92f -> "较大"
-                1.04f -> "大"
+                0.78f -> "较大"
+                0.88f -> "大"
                 else -> "超大"
             }
             // 显示百分比相对新标准（标准 = 100%）
