@@ -75,6 +75,14 @@ pubspec = version: 2026.11.22+20283
 - **MuMu 实机**：最终 APK md5 `003c9e45125e1fd73f026402e4ad69c0`（26,460,853 B = 25.2MB，versionCode 20282 / versionName 2026.11.21）；放大截图确认新照片外壳、米色标签专辑图（压暗减轻后清晰）、凹槽四周可见棕色卷盘、两轮齿轮清晰、左卷大于右卷；间隔 8 秒两帧卷盘区约 5.7% 像素变化，联动实证。注：验证后段 MuMu 窗口被宿主重排到屏幕外（rect 负 X）导致 adb 触摸落在桌面、直接 `am start .CarPlayerActivity` 因无 Flutter 桥接数据呈 0:00 空壳，均属验证环境问题，非代码崩溃（logcat 无 FATAL）。
 - 状态：**未提交 / 未 push / 未打 tag / 未发版**；真车机观感待用户评估。
 
+**2026-11-22 续四十七（未发版）：车机滑块残裁+按压光晕、横屏播放页底部控制行被裁**
+- 用户三反馈：① 车机全屏进度条两端圆仍被裁一部分（上轮 4dp padding 不足）；② 点击滑块要像普通横屏进度条一样有光晕；③ 普通全屏播放器横屏时底部按键被裁（截图：播放大按钮下半被切、圆点残缺）。
+- ①② 修复：`kg_seek_thumb.xml` 由纯白 oval 改 **RippleDrawable**（8dp 白圆核心 + 8dp inset → 24dp 光晕域 + oval mask）；`CarPlayerActivity` thumbOffset 与 padding 统一为 12dp（=光晕域半径）。根因：旧 offset 5dp > padding 4dp → 0% 时滑块左缘越界 1dp 仍被裁；且 24dp 域让低进度进度条圆角端帽完全藏于滑块下（frac<3% 不可见），消除"半圆残块"观感。按压时 Ripple 从触点扩散出 24dp 圆形光晕（#4DFFFFFF），观感对齐 Flutter 滑块。高潮圆点定位基准 paddingLeft 自动跟随（12dp）。
+- ③ 修复：`player_page.dart` `_PosterPlayerPageState` compact 分支（视口高 460~620dp，横屏常见）原用固定尺寸封面（Spacer+AspectRatio）→ Column 溢出 → PageView 把底部 `_Progress`/`_Controls` 裁掉。改为 **Expanded+Center+FittedBox(scaleDown)** 弹性封面（与 tiny<460 分支同策略），竖屏 ≥620dp 外观不变。
+- 验证（MuMu 1920×1080）：车机全屏 0% 滑块完整无残块 ✓、99.5% 完整 ✓、按住滑块出现圆形光晕 ✓；横屏播放页控制行五键 + 页面圆点完整 ✓、封面弹性缩放协调 ✓；竖屏播放页回归正常 ✓。无 FATAL。
+- APK 30.6MB md5 `edd2aa3e130f6926378c71c9374cdf66`。提交 `7c721ce` push master，未发版。
+- 坑：MuMu 上酷我车机版会抢前台，验证前先 `dumpsys activity activities` 确认前台包名；横屏播放页入口 = 竖屏迷你球 (590,1868) → user_rotation 1。
+
 **2026-11-22 续四十六（v2026.11.22 发版后追加，未发版）：车机全屏进度条两端滑块被裁一半修复**
 - 用户截图反馈进度条 0% 与 100% 时白色圆形滑块各被裁掉一半。
 - 根因：SeekBar 左右 padding=0，8dp 圆滑块在两端时圆心正好落在视图边缘，半圆被父容器裁掉。
