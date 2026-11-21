@@ -120,7 +120,7 @@ class CarPlayerActivity : Activity() {
     private var canComment = false          // 当前歌曲是否支持评论（酷狗/网易云）
     private var canAddToPlaylist = false   // 仅酷狗源支持添加到自建歌单
     private var songHash = ""              // 供 Flutter 侧从队列定位当前歌曲
-    private var lyricScale = 1.0f          // 歌词字号缩放档位（原生 SharedPreferences 持久化）
+    private var lyricScale = 0.80f          // 歌词字号缩放档位（标准 0.80，原生 SharedPreferences 持久化）
 
     companion object {
         private const val PREF_NAME = "car_player_prefs"
@@ -129,7 +129,10 @@ class CarPlayerActivity : Activity() {
         // [CASSETTE_EXPERIMENT] 形态持久化 key（删除实验功能时一并移除）
         private const val PREF_SHOW_CASSETTE = "show_cassette"
         // 与 CarPlayerService._styles() 保持一致的基准字号，缩放时按比例重算
-        private val LYRIC_SCALES = floatArrayOf(0.85f, 1.0f, 1.15f, 1.3f, 1.5f)
+        // （2026-11-22 调小：旧组整体 ×0.8，比例结构 85/100/115/130/150 保留；标准 = 0.80）
+        private val LYRIC_SCALES = floatArrayOf(0.68f, 0.80f, 0.92f, 1.04f, 1.20f)
+        private const val LYRIC_SCALE_STD = 0.80f
+        private const val PREF_LYRIC_SCALE_MIGRATED = "lyric_scale_v2_migrated"
     }
 
     // 队列底部弹窗主题色（对齐 Flutter showModalBottomSheet 的 colorScheme，默认浅色）
@@ -1281,7 +1284,7 @@ class CarPlayerActivity : Activity() {
         }
         // ---- 对齐上游车机播放页的扩展能力 ----
         tiles.add(Tile(R.drawable.ic_ms_text_size, "歌词字号",
-            "${(lyricScale * 100).toInt()}%") {
+            "${(lyricScale / LYRIC_SCALE_STD * 100).toInt()}%") {
             showLyricScaleSheet()
         })
         tiles.add(Tile(R.drawable.ic_ms_info, "详细信息", "专辑、音源、时长") {
@@ -1384,9 +1387,19 @@ class CarPlayerActivity : Activity() {
      * 每次 open/meta 重推 styles 后都会再叠加一次，避免被基准值冲掉。
      */
     private fun readLyricScale(): Float {
-        val saved = getSharedPreferences(PREF_NAME, MODE_PRIVATE)
-            .getFloat(PREF_LYRIC_SCALE, 1.0f)
-        return LYRIC_SCALES.minByOrNull { kotlin.math.abs(it - saved) } ?: 1.0f
+        val prefs = getSharedPreferences(PREF_NAME, MODE_PRIVATE)
+        var saved = prefs.getFloat(PREF_LYRIC_SCALE, 1.0f)
+        if (!prefs.getBoolean(PREF_LYRIC_SCALE_MIGRATED, false)) {
+            // 一次性迁移：旧档位（含默认 1.0）整体 ×0.8，旧选择意图按比例保留
+            saved *= 0.8f
+            prefs.edit().putBoolean(PREF_LYRIC_SCALE_MIGRATED, true).apply()
+        }
+        val snapped = LYRIC_SCALES.minByOrNull { kotlin.math.abs(it - saved) } ?: LYRIC_SCALE_STD
+        // 迁移结果落盘，避免下次重复吸附偏差
+        if (kotlin.math.abs(prefs.getFloat(PREF_LYRIC_SCALE, -1f) - snapped) > 0.001f) {
+            prefs.edit().putFloat(PREF_LYRIC_SCALE, snapped).apply()
+        }
+        return snapped
     }
 
     private fun applyLyricScale(scale: Float) {
@@ -1405,13 +1418,14 @@ class CarPlayerActivity : Activity() {
     private fun showLyricScaleSheet() {
         val rows = LYRIC_SCALES.map { sc ->
             val label = when (sc) {
-                0.85f -> "小"
-                1.0f -> "标准"
-                1.15f -> "较大"
-                1.3f -> "大"
+                0.68f -> "小"
+                LYRIC_SCALE_STD -> "标准"
+                0.92f -> "较大"
+                1.04f -> "大"
                 else -> "超大"
             }
-            Row("$label  ${(sc * 100).toInt()}%", icon = R.drawable.ic_ms_text_size,
+            // 显示百分比相对新标准（标准 = 100%）
+            Row("$label  ${(sc / LYRIC_SCALE_STD * 100).toInt()}%", icon = R.drawable.ic_ms_text_size,
                 selected = kotlin.math.abs(sc - lyricScale) < 0.001f) {
                 applyLyricScale(sc)
                 showToast("歌词字号已设为$label")
@@ -1433,10 +1447,9 @@ class CarPlayerActivity : Activity() {
         }
         (m["styles"] as? Map<*, *>)?.let { lyricView.setStyles(it) }
         // 基准 styles 每次 open 都会重推，这里再叠加用户保存的字号档位
+        // （新标准为 0.80，无论何档都要叠加，不能用 1.0 作跳过判据）
         lyricScale = readLyricScale()
-        if (kotlin.math.abs(lyricScale - 1.0f) > 0.001f) {
-            applyLyricScale(lyricScale)
-        }
+        applyLyricScale(lyricScale)
         (m["meta"] as? Map<*, *>)?.let { onMeta(it) }
         (m["lyrics"] as? Map<*, *>)?.let { onLyrics(it) }
         (m["transport"] as? Map<*, *>)?.let { onSync(it) }
