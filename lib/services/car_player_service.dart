@@ -138,6 +138,8 @@ class CarPlayerService {
       // ---- "更多"面板：当前选择快照，供原生渲染勾选/副标题 ----
       'audioQualityIndex': p.audioQuality.index,
       'audioQualityLabel': p.audioQuality.label,
+      // 磁带机下方曲目铭牌的规格徽章（128K / 320K / FLAC）
+      'audioQualityBadge': p.audioQuality.badge,
       'playbackSpeed': p.playbackSpeed,
       'playbackSpeedLabel': p.playbackSpeedLabel,
       'audioEffectLabel': p.audioEffectsLabel,

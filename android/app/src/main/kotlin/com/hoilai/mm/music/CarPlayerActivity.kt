@@ -61,6 +61,12 @@ class CarPlayerActivity : Activity() {
     private lateinit var headerArtist: TextView
     private lateinit var titleText: TextView
     private lateinit var artistText: TextView
+    // 磁带机下方「曲目铭牌」：歌名 / 歌手·专辑 / 当前音质徽章
+    private lateinit var infoTitle: TextView
+    private lateinit var infoSub: TextView
+    private lateinit var infoQualityBox: LinearLayout
+    private lateinit var infoQualityBadge: TextView
+    private lateinit var infoQualityLabel: TextView
     private lateinit var seek: SeekBar
     private lateinit var seekRow: LinearLayout
     private lateinit var climaxDot: View
@@ -110,6 +116,7 @@ class CarPlayerActivity : Activity() {
     // "更多"面板当前状态
     private var qualityIndex = 0
     private var qualityLabel = ""
+    private var qualityBadge = ""
     private var speed = 1.0
     private var speedLabel = ""
     private var effectLabel = ""
@@ -272,6 +279,14 @@ class CarPlayerActivity : Activity() {
         applyPlayState(playing)
     }
 
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        // 窗口获得焦点时 View 树必然已完成至少一次 layout，宽高可靠。
+        // 冷启动直接进全屏时 OnLayoutChangeListener 会错过首次 layout，
+        // root.post 也可能早于 measure；在此再兜一次底，保证盘面必定出现。
+        if (hasFocus) root.post { ensureDiscBuilt() }
+    }
+
     override fun onPause() {
         super.onPause()
         if (CarPlayerBridge.current === this) CarPlayerBridge.current = null
@@ -384,8 +399,20 @@ class CarPlayerActivity : Activity() {
             )
         }
 
+        // 左栏：磁带机保持原来的全宽全高（尺寸与旧版完全一致，黄金比例不受影响），
+        // 曲目铭牌作为同层 FrameLayout 贴底叠加，不参与 discWrap 测量。
+        // 不用「垂直 LinearLayout + weight」——嵌套 weight 会让 discWrap 高度测量异常，
+        // 导致 addOnLayoutChangeListener 拿不到尺寸、盘面根本不构建。
+        val leftFrame = FrameLayout(this)
         discWrap = FrameLayout(this)
-        bodyRow.addView(discWrap, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 9f))
+        leftFrame.addView(discWrap, FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT
+        ))
+        leftFrame.addView(buildTrackInfoBar(), FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT,
+            Gravity.BOTTOM
+        ))
+        bodyRow.addView(leftFrame, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 9f))
         bodyRow.addView(space(dp(34f).toInt(), 0))
 
         val right = LinearLayout(this).apply {
@@ -522,12 +549,23 @@ class CarPlayerActivity : Activity() {
         // 黄金尺寸：盘面面积 : 周围留白面积 = φ : 1（面积域黄金分割）
         //   ⇒ S = min(w,h)·√(φ/(1+φ)) = √0.618 ≈ 0.786（原 0.72 偏小，+9%）
         // 上限 352→400dp 同步放宽，避免横屏大屏下被钳制吃掉黄金比例
-        discWrap.addOnLayoutChangeListener { v, _, _, _, _, _, _, _, _ ->
-            val w = v.width; val h = v.height
-            if (w <= 0 || h <= 0) return@addOnLayoutChangeListener
-            val sizePx = (minOf(w, h) * 0.786f).coerceIn(dp(120f), dp(400f)).toInt()
-            if (sizePx != lastDiscSize) { lastDiscSize = sizePx; buildDisc(sizePx) }
+        // 关键：回调发生在布局遍历「内部」，此时若直接 addView，新子 View 不会被
+        // 本次遍历 measure/layout，尺寸停在 0 且永不绘制。一律 post 到遍历之后再构建。
+        discWrap.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
+            discWrap.post { ensureDiscBuilt() }
         }
+        // 监听器在 setContentView 之后注册，只会在「后续」布局变化时回调；若首次
+        // layout 已结束且此后无 relayout（冷启动直接进全屏时常见），盘面会一直空白。
+        // 用 post 在首帧主动兜底一次，保证任何进入路径都能出盘面。
+        root.post { ensureDiscBuilt() }
+    }
+
+    /** 按左栏当前尺寸构建/重建盘面；尺寸未变则跳过，避免重复 removeAllViews。 */
+    private fun ensureDiscBuilt() {
+        val w = discWrap.width; val h = discWrap.height
+        if (w <= 0 || h <= 0) return
+        val sizePx = (minOf(w, h) * 0.786f).coerceIn(dp(120f), dp(400f)).toInt()
+        if (sizePx != lastDiscSize) { lastDiscSize = sizePx; buildDisc(sizePx) }
     }
 
     private fun circleIconButton(
@@ -546,6 +584,120 @@ class CarPlayerActivity : Activity() {
             contentDescription = null
             setOnClickListener { onTap() }
         }
+    }
+
+    /**
+     * 磁带机下方的曲目铭牌：左侧歌名 + 歌手·专辑，右侧当前音质徽章。
+     * 视觉上像卡座面板上的一张半透明铭牌，音质徽章按档位换色，
+     * 呼应真实磁带的「TYPE I / CrO₂ / METAL」位置标签。
+     */
+    private fun buildTrackInfoBar(): View {
+        val card = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            background = GradientDrawable().apply {
+                cornerRadius = dp(10f)
+                setColor(0x2B0B1020.toInt())
+                setStroke(dp(1f).toInt().coerceAtLeast(1), 0x33FFFFFF.toInt())
+            }
+            val h = dp(14f).toInt()
+            val v = dp(10f).toInt()
+            setPadding(h, v, h, v)
+        }
+
+        val textCol = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        infoTitle = marqueeText(17f, 0xF2FFFFFF.toInt(), true)
+        infoSub = TextView(this).apply {
+            setTextColor(0x9AFFFFFF.toInt())
+            textSize = 12f
+            maxLines = 1
+            isSingleLine = true
+            ellipsize = android.text.TextUtils.TruncateAt.END
+        }
+        textCol.addView(infoTitle, lpMatchWrap())
+        textCol.addView(infoSub, lpMatchWrap().also { it.topMargin = dp(3f).toInt() })
+        card.addView(
+            textCol,
+            LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+        )
+        card.addView(space(dp(12f).toInt(), 0))
+
+        infoQualityBox = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER
+            minimumWidth = dp(66f).toInt()
+            val h = dp(10f).toInt()
+            val v = dp(5f).toInt()
+            setPadding(h, v, h, v)
+        }
+        infoQualityBadge = TextView(this).apply {
+            textSize = 13f
+            setTypeface(typeface, android.graphics.Typeface.BOLD)
+            gravity = Gravity.CENTER
+            maxLines = 1
+            includeFontPadding = false
+        }
+        infoQualityLabel = TextView(this).apply {
+            textSize = 9.5f
+            gravity = Gravity.CENTER
+            maxLines = 1
+            includeFontPadding = false
+        }
+        infoQualityBox.addView(
+            infoQualityBadge,
+            LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            )
+        )
+        infoQualityBox.addView(
+            infoQualityLabel,
+            LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).also { it.topMargin = dp(2f).toInt() }
+        )
+        card.addView(
+            infoQualityBox,
+            LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            )
+        )
+        applyTrackQuality()
+        return card
+    }
+
+    /** 音质徽章：规格大字 + 中文名小字，档位配色（标准灰白 / 高品蓝 / 无损金）。 */
+    private fun applyTrackQuality() {
+        val bgColor: Int
+        val badgeColor: Int
+        val labelColor: Int
+        when (qualityIndex) {
+            2 -> {
+                bgColor = 0x2FE3B052.toInt(); badgeColor = 0xFFF5D79B.toInt()
+                labelColor = 0xCCF5D79B.toInt()
+            }
+            1 -> {
+                bgColor = 0x2F5C9BFF.toInt(); badgeColor = 0xFFB6D2FF.toInt()
+                labelColor = 0xCCB6D2FF.toInt()
+            }
+            else -> {
+                bgColor = 0x26FFFFFF.toInt(); badgeColor = 0xEBFFFFFF.toInt()
+                labelColor = 0x99FFFFFF.toInt()
+            }
+        }
+        infoQualityBox.background = GradientDrawable().apply {
+            cornerRadius = dp(20f)
+            setColor(bgColor)
+        }
+        infoQualityBadge.setTextColor(badgeColor)
+        infoQualityLabel.setTextColor(labelColor)
+        infoQualityBadge.text = qualityBadge.ifEmpty { "—" }
+        infoQualityLabel.text = qualityLabel.ifEmpty { "音质" }
     }
 
     private fun marqueeText(sizeSp: Float, color: Int, bold: Boolean): TextView =
@@ -1552,10 +1704,18 @@ class CarPlayerActivity : Activity() {
         (m["liquidGlassEnabled"] as? Boolean)?.let { applyLiquidGlass(it) }
         val t = (m["title"] as? String) ?: ""
         val a = (m["artist"] as? String) ?: ""
+        val album = (m["album"] as? String) ?: ""
         titleText.text = t
         artistText.text = a
         headerTitle.text = t
         headerArtist.text = a
+        // 磁带机下方曲目铭牌（专辑名与歌名相同时不重复显示）
+        infoTitle.text = t
+        val sub = listOf(a, album)
+            .filter { it.isNotEmpty() && it != t }
+            .joinToString(" · ")
+        infoSub.text = sub
+        infoSub.visibility = if (sub.isEmpty()) View.GONE else View.VISIBLE
         val url = m["coverUrl"] as? String
         if (url != coverUrl) { coverUrl = url; loadCover(url) }
         (m["playMode"] as? Number)?.let { setPlayMode(it.toInt()) }
@@ -1569,6 +1729,8 @@ class CarPlayerActivity : Activity() {
         // "更多"面板状态
         qualityIndex = (m["audioQualityIndex"] as? Number)?.toInt() ?: qualityIndex
         qualityLabel = (m["audioQualityLabel"] as? String) ?: qualityLabel
+        qualityBadge = (m["audioQualityBadge"] as? String) ?: qualityBadge
+        applyTrackQuality()
         speed = (m["playbackSpeed"] as? Number)?.toDouble() ?: speed
         speedLabel = (m["playbackSpeedLabel"] as? String) ?: speedLabel
         effectLabel = (m["audioEffectLabel"] as? String) ?: effectLabel
