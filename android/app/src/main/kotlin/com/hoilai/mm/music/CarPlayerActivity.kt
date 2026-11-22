@@ -129,7 +129,8 @@ class CarPlayerActivity : Activity() {
         // [CASSETTE_EXPERIMENT] 形态持久化 key（删除实验功能时一并移除）
         private const val PREF_SHOW_CASSETTE = "show_cassette"
         // 与 CarPlayerService._styles() 保持一致的基准字号，缩放时按比例重算
-        // （2026-11-22 二次调小：v2 组整体 ×0.85，比例结构 85/100/115/130/150 保留；标准 = 0.68）
+        // （2026-11-22 微调：720P 车机上 48/34/20 基准偏小，整体上浮约 8%；
+        //  档位组与标准 0.68 不变，用户已选档位与百分比显示完全不受影响）
         private val LYRIC_SCALES = floatArrayOf(0.58f, 0.68f, 0.78f, 0.88f, 1.02f)
         private const val LYRIC_SCALE_STD = 0.68f
         private const val PREF_LYRIC_SCALE_MIGRATED = "lyric_scale_v3_migrated"
@@ -1414,10 +1415,10 @@ class CarPlayerActivity : Activity() {
         getSharedPreferences(PREF_NAME, MODE_PRIVATE).edit()
             .putFloat(PREF_LYRIC_SCALE, scale).apply()
         val s = mapOf<String, Any>(
-            "activeSizeSp" to 48.0 * scale,
-            "inactiveSizeSp" to 34.0 * scale,
-            "translationSizeSp" to 20.0 * scale,
-            "lineGapDp" to 20.0 * scale,
+            "activeSizeSp" to 52.0 * scale,
+            "inactiveSizeSp" to 37.0 * scale,
+            "translationSizeSp" to 22.0 * scale,
+            "lineGapDp" to 21.0 * scale,
         )
         lyricView.setStyles(s)
     }

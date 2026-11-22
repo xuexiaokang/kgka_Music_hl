@@ -185,10 +185,10 @@ class CarPlayerService {
   }
 
   Map<String, dynamic> _styles() => {
-        'activeSizeSp': 48.0,
-        'inactiveSizeSp': 34.0,
-        'translationSizeSp': 20.0,
-        'lineGapDp': 20.0,
+        'activeSizeSp': 52.0,
+        'inactiveSizeSp': 37.0,
+        'translationSizeSp': 22.0,
+        'lineGapDp': 21.0,
         'paddingHorizontalDp': 24.0,
         'paddingVerticalDp': 40.0,
         'baseColor': 0x57FFFFFF,
