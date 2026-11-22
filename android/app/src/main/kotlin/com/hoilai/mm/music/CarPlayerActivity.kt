@@ -57,10 +57,10 @@ class CarPlayerActivity : Activity() {
     // showCassette 必须是字段——buildDisc() 会在尺寸变化时重建视图，需据此恢复形态。
     private var cassetteView: CarCassetteView? = null
     private var showCassette = true
-    private lateinit var headerTitle: TextView
-    private lateinit var headerArtist: TextView
-    private lateinit var titleText: TextView
-    private lateinit var artistText: TextView
+    // 当前曲目文字（供「更多」面板标题复用）。车机全屏顶栏与右侧不再重复显示歌名，
+    // 统一由磁带下方的曲目铭牌呈现。
+    private var currentTitle = ""
+    private var currentArtist = ""
     // 磁带机下方「曲目铭牌」：歌名 / 歌手·专辑 / 当前音质徽章
     private lateinit var infoTitle: TextView
     private lateinit var infoSub: TextView
@@ -369,16 +369,9 @@ class CarPlayerActivity : Activity() {
             },
             lp(dp(44f).toInt(), dp(44f).toInt())
         )
-        header.addView(space(dp(18f).toInt(), 0))
-        val hcol = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER_VERTICAL
-        }
-        headerTitle = marqueeText(16f, 0xEBFFFFFF.toInt(), true)
-        headerArtist = marqueeText(12f, 0xB3FFFFFF.toInt(), true)
-        hcol.addView(headerTitle, lpMatchWrap())
-        hcol.addView(headerArtist, lpMatchWrap())
-        header.addView(hcol, lpWeight(1f))
+        // 顶栏不再重复显示歌名/歌手（磁带下方铭牌已呈现），
+        // 只保留返回 / 收藏 / 更多，用弹性占位把右侧按钮推到端头。
+        header.addView(View(this), lpWeight(1f))
         likeBtn = circleIconButton(R.drawable.ic_kg_heart_border, 24f, 44f, R.drawable.bg_circle_white12) {
             CarPlayerBridge.sendEvent("like")
         }
@@ -388,7 +381,12 @@ class CarPlayerActivity : Activity() {
             showMoreSheet()
         }
         header.addView(moreBtn, lp(dp(44f).toInt(), dp(44f).toInt()))
-        content.addView(header, lpMatchWrap())
+        // 高度钉死为按钮高度：顶栏内部只用带 weight 的空占位撑开左右两侧。
+        // 若沿用 WRAP_CONTENT，空的 weight 占位会在测量中被拉伸到父容器可用高度，
+        // 把 bodyRow(weight=1) 挤成 0 高，磁带、歌词、控制行会整块消失。
+        content.addView(header, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT, dp(44f).toInt()
+        ))
         content.addView(space(0, dp(10f).toInt()))
 
         // ---- 主体：左唱片(flex 9) + 右面板(flex 12)
@@ -408,19 +406,26 @@ class CarPlayerActivity : Activity() {
         leftFrame.addView(discWrap, FrameLayout.LayoutParams(
             FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT
         ))
+        // 铭牌不再占满左栏：左右各内缩一段，宽度更短、居中呈现。
         leftFrame.addView(buildTrackInfoBar(), FrameLayout.LayoutParams(
             FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT,
-            Gravity.BOTTOM
-        ))
-        bodyRow.addView(leftFrame, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 9f))
+            Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
+        ).also {
+            it.leftMargin = dp(38f).toInt()
+            it.rightMargin = dp(38f).toInt()
+        })
+        // 左栏整体上移：底部让出一段空白，磁带与铭牌一起抬升。
+        // 横屏下左栏宽度才是短边（宽 < 高），减小高度不改变 min(w,h)，
+        // 磁带仍按 0.786 黄金比例保持原尺寸，只是中心随容器一起上移。
+        bodyRow.addView(leftFrame, LinearLayout.LayoutParams(
+            0, LinearLayout.LayoutParams.MATCH_PARENT, 9f
+        ).also { it.bottomMargin = dp(48f).toInt() })
         bodyRow.addView(space(dp(34f).toInt(), 0))
 
         val right = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
         }
-        titleText = marqueeText(22f, 0xEBFFFFFF.toInt(), true).apply { gravity = Gravity.CENTER }
-        artistText = marqueeText(14f, 0x99FFFFFF.toInt(), false).apply { gravity = Gravity.CENTER }
-        // 曲名/歌手已在左上角顶栏显示，右侧不再重复；此处仅留少量顶部间距给歌词。
+        // 歌名/歌手统一由磁带下方铭牌显示，右侧不再重复；仅留少量顶部间距给歌词。
         right.addView(space(0, dp(8f).toInt()))
 
         lyricView = CarLyricView(this).apply {
@@ -609,7 +614,7 @@ class CarPlayerActivity : Activity() {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER_VERTICAL
         }
-        infoTitle = marqueeText(17f, 0xF2FFFFFF.toInt(), true)
+        infoTitle = marqueeText(21f, 0xF2FFFFFF.toInt(), true)
         infoSub = TextView(this).apply {
             setTextColor(0x9AFFFFFF.toInt())
             textSize = 12f
@@ -1374,12 +1379,12 @@ class CarPlayerActivity : Activity() {
         header.addView(LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             addView(TextView(this@CarPlayerActivity).apply {
-                text = headerTitle.text; maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END
+                text = currentTitle; maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END
                 setTextColor(thOnSurface); textSize = 17f
                 setTypeface(typeface, android.graphics.Typeface.BOLD)
             })
             addView(TextView(this@CarPlayerActivity).apply {
-                text = headerArtist.text; maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END
+                text = currentArtist; maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END
                 setTextColor(thOnSurfaceVariant); textSize = 12f
             }, LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
@@ -1705,10 +1710,8 @@ class CarPlayerActivity : Activity() {
         val t = (m["title"] as? String) ?: ""
         val a = (m["artist"] as? String) ?: ""
         val album = (m["album"] as? String) ?: ""
-        titleText.text = t
-        artistText.text = a
-        headerTitle.text = t
-        headerArtist.text = a
+        currentTitle = t
+        currentArtist = a
         // 磁带机下方曲目铭牌（专辑名与歌名相同时不重复显示）
         infoTitle.text = t
         val sub = listOf(a, album)

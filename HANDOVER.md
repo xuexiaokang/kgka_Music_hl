@@ -75,6 +75,21 @@ pubspec = version: 2026.11.22+20283
 - **MuMu 实机**：最终 APK md5 `003c9e45125e1fd73f026402e4ad69c0`（26,460,853 B = 25.2MB，versionCode 20282 / versionName 2026.11.21）；放大截图确认新照片外壳、米色标签专辑图（压暗减轻后清晰）、凹槽四周可见棕色卷盘、两轮齿轮清晰、左卷大于右卷；间隔 8 秒两帧卷盘区约 5.7% 像素变化，联动实证。注：验证后段 MuMu 窗口被宿主重排到屏幕外（rect 负 X）导致 adb 触摸落在桌面、直接 `am start .CarPlayerActivity` 因无 Flutter 桥接数据呈 0:00 空壳，均属验证环境问题，非代码崩溃（logcat 无 FATAL）。
 - 状态：**未提交 / 未 push / 未打 tag / 未发版**；真车机观感待用户评估。
 
+**2026-11-22 续五十六（未发版）：曲目铭牌排版调整 + 顶栏测量问题修复**
+- 用户要求：「上方的歌曲信息可以不用重复显示了；同时把下面的歌名框连同磁盘显示区都往上放一点，现在看起来放太下面了，歌名的字体可以再大一些，整个框的宽度再减短一些」。
+- 实现（仅原生 `CarPlayerActivity.kt`）：
+  1. 顶栏删掉 `headerTitle/headerArtist` 两行歌名/歌手，只留返回 / 收藏 / 更多；右栏那两个从未 addView 的 `titleText/artistText` 一并清理。曲目文字改存 `currentTitle/currentArtist` 字段，供「更多」面板标题复用（面板标题仍显示歌名+歌手，实机已验证正常）。
+  2. 左栏整体上移：`leftFrame` 的 LayoutParams 加 `bottomMargin = 48dp`。横屏下左栏**宽度才是短边**（宽 < 高），减小高度不改变 `min(w,h)`，磁带仍按 0.786 黄金比例保持 396×396 原尺寸，只是 `Gravity.CENTER` 的盘面中心随容器上移；贴底的铭牌也同步上移。实机：磁带 y 253→228、铭牌 y 605→545。
+  3. 铭牌宽度缩短并居中：`FrameLayout` 参数由 `MATCH_PARENT + Gravity.BOTTOM` 改为 `MATCH_PARENT + BOTTOM|CENTER_HORIZONTAL`，左右各 `38dp` margin。实机宽度 502→414px，中心与磁带对齐。
+  4. 歌名字号 17→21sp（副标题 12sp、音质徽章不变）。
+- **踩坑（重要）：去掉顶栏歌名后，用带 weight 的空 View 撑开左右按钮，导致整个 bodyRow 被挤成 0 高**。
+  - 现象：截图只剩顶栏三个按钮且垂直居中，磁带 / 歌词 / 进度条 / 控制行全部消失；`dumpsys activity top` 显示 header `27,11-1246,679`（高 668）、bodyRow `27,690-1246,690`（高 0）、`CarCassetteView` 节点不存在。
+  - 根因：header 原本是 `lpMatchWrap()`（MATCH_PARENT × WRAP_CONTENT），高度靠内部 44dp 按钮撑出来；换成「空 View + weight=1f / WRAP_CONTENT 高」后，该占位在 LinearLayout 测量中被拉伸到父容器可用高度，header 吃掉几乎整屏，weight=1 的 bodyRow 只剩 0。
+  - 修复：`content.addView(header, LinearLayout.LayoutParams(MATCH_PARENT, dp(44f)))` 把顶栏高度钉死为按钮高度。改用固定高度后顶栏仍 50px、bodyRow 恢复 607px、磁带与歌词全部回来。**结论：横向 LinearLayout 里用「空 View + weight」占位时，父容器高度必须显式钉死。**
+- **验证**（MuMu 1280×720 @160dpi）：顶栏已无重复歌名；磁带 396×396 完整、上移约 25px 且尺寸未变；铭牌 x 74..488 / y 545..620，歌名 21sp 清晰，与磁带间隙约 75px、无遮挡无裁切；「更多」面板标题「独角戏 / 许茹芸」正常；音质三档联动复测（FLAC 金 → 128K 灰白 → 恢复 FLAC 金）通过；零崩溃。`flutter test` 195 全绿、`flutter analyze` 14 项既有提示无新增、`git diff --check` 干净。
+- 最终 APK md5 `6bf0045b93dc9ffe6ec485d31c616a7b`（32,125,851 B）；**未 push / 未发版**，随下次发版生效。update.md 已补记。
+- 备注：歌词区首行「独角戏 - 许茹芸 (Valen Hsu)」是 LRC 文件自带的曲目元数据行，属于歌词数据而非 UI 歌曲信息控件，本次未改动；若也要隐藏需改 `CarLyricView` 的歌词过滤逻辑。
+
 **2026-11-22 续五十五（未发版）：磁带机下方新增曲目铭牌（歌名/歌手·专辑/当前音质）**
 - 用户要求：「尝试在磁带机下方显示歌曲名等信息，还有当前的音质」。
 - 实现（原生 `CarPlayerActivity.kt` + Dart `car_player_service.dart`）：
