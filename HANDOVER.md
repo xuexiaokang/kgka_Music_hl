@@ -75,6 +75,14 @@ pubspec = version: 2026.11.22+20283
 - **MuMu 实机**：最终 APK md5 `003c9e45125e1fd73f026402e4ad69c0`（26,460,853 B = 25.2MB，versionCode 20282 / versionName 2026.11.21）；放大截图确认新照片外壳、米色标签专辑图（压暗减轻后清晰）、凹槽四周可见棕色卷盘、两轮齿轮清晰、左卷大于右卷；间隔 8 秒两帧卷盘区约 5.7% 像素变化，联动实证。注：验证后段 MuMu 窗口被宿主重排到屏幕外（rect 负 X）导致 adb 触摸落在桌面、直接 `am start .CarPlayerActivity` 因无 Flutter 桥接数据呈 0:00 空壳，均属验证环境问题，非代码崩溃（logcat 无 FATAL）。
 - 状态：**未提交 / 未 push / 未打 tag / 未发版**；真车机观感待用户评估。
 
+**2026-11-22 续六十（发版）：删除今日旧版重发 v2026.11.22+20286**
+- 触发：用户「删除今天发布的版本，重新发新版」。本版把续五十三~续五十九共 7 项未发版改动一次性收口；上文各节「未发版」标注以本节为准。
+- 删除：旧 Release `453901935`（v2026.11.22+20285，资产 `jiujiu-music-2026.11.22-20285.apk`）+ 远端 `refs/tags/v2026.11.22`（annotated `a6414d1`）+ 本地同名 tag；删除后 releases=0 / remote tags=0。
+- 版本号：`pubspec.yaml` `2026.11.22+20285` → `+20286`，`lib/config/app_config.dart` 的 `appVersionCode` 同步 20286；`appVersion` 与 versionName 仍 `2026.11.22`。提交 `839d07f`，连同续五十三~五十九共 8 个本地提交 push master（先 push 再建 tag，遵循 §6.2）。
+- 重建：annotated tag object `9f438a2` → commit `839d07f`；Release id `454388195`，名称 `v2026.11.22+20286 · 车机曲目铭牌与音质选择`，正文 4046 字符（由 `update.md` 的 `## v2026.11.22` 段生成 + 重发说明，不依赖 tag message）；资产 `jiujiu-music-2026.11.22-20286.apk` 32,126,947 B，md5 `394ade95d154eae4cd7b8896e74c0172`，sha256 `569f7cb9abc6ed180d8f2b3fcf6eca64530c7b91c42018a6effbf11f1f8bad3f`。
+- 验证：`aapt dump badging` 实证 versionCode 20286 / versionName 2026.11.22；`apksigner verify` 正式证书 `CN=KA Music Release` / SHA-256 `76a87e47…` 可覆盖安装；GitHub 资产 `digest` 与本地 sha256 完全一致；线上仅剩 1 个 Release、tag `v2026.11.22^{}` 指向 `839d07f`，master 与 origin 同步。构建 `scripts/build-android.bat`（pub get → analyze → assembleRelease 93.8s）exit 0。
+- 坑：① `POST /repos/{o}/{r}/releases` 的 `make_latest` 必须是字符串 `"true"`/`"false"`，传布尔 `true` 会 422 `For 'properties/make_latest', true is not a string`；② `flutter pub get` 走 `pub.flutter-io.cn` 镜像会把 `pubspec.lock` 里 125 个 hosted `url` 从 `pub.dev` 改写成镜像地址，发版前必须 `git checkout -- pubspec.lock` 还原，否则产生无意义 250 行 diff（§12 已强调 lock 不应被改写）。
+
 **2026-11-22 续五十九（未发版）：歌名区去边框居中、音质按钮改单行**
 - 用户反馈：「磁盘底下的歌名框不需要边框，内容全部居中对齐磁盘；音质按钮里面的文字不要换行，一行显示」。
 - 实现（仅 `CarPlayerActivity.kt`）：
@@ -1191,7 +1199,7 @@ MuMu 点击坐标换算（防再次踩坑）：MuMu 窗口 `nemuwin` 为 1366×7
 ## 8. 推送与凭据
 
 - 裸 `git push` 会失败（全局无 `credential.helper`）。用 `git -c credential.helper=store push origin master`。
-- 有效 token 在 `~/.git-credentials.bak`（fine-grained PAT，`github_pat_` 开头）；`~/.git-credentials` 里的 `ghp_` token **已失效勿用**。历史遗留的 token 明文文件不应再读取，更不应提交。
+- 凭据文件 `~/.git-credentials.bak` 与 `~/.git-credentials` **当前均为有效的 classic PAT**（`ghp_` 开头；2026-11-22 实测两者 `GET /repos/...` 均 200、`permissions.admin=true`）。早期记录的「`.bak` 是 fine-grained PAT / `.git-credentials` 里的 `ghp_` 已失效」已过时。两者都是明文凭据文件，只可在脚本里读取到变量后用于认证，**不得打印内容、不得入库**；`git -c credential.helper=store push origin master` 走的是 `~/.git-credentials`。
 - 我的账号对 `umr-xiaomai` 无写权限，`git push upstream` 会 403（且 push URL 已设为 `no_push`）。
 - **git-over-HTTPS 代理（192.168.7.26:20170）时好时坏**；代理挂但 `api.github.com` 可达时，改走 **Git Data API** 推送：`POST /git/trees`（`base_tree` + 内联 content）→ `POST /git/commits` → `PATCH /git/refs/heads/master`。
   ⚠️ Data API 绕过 autocrlf，写进去的是 **CRLF**，而 base/上游是 LF → 之后 merge 会出现"整文件假冲突"。**用 Data API 前后都要把文件规范成 LF。**
