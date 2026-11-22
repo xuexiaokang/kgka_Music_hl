@@ -75,7 +75,15 @@ pubspec = version: 2026.11.22+20283
 - **MuMu 实机**：最终 APK md5 `003c9e45125e1fd73f026402e4ad69c0`（26,460,853 B = 25.2MB，versionCode 20282 / versionName 2026.11.21）；放大截图确认新照片外壳、米色标签专辑图（压暗减轻后清晰）、凹槽四周可见棕色卷盘、两轮齿轮清晰、左卷大于右卷；间隔 8 秒两帧卷盘区约 5.7% 像素变化，联动实证。注：验证后段 MuMu 窗口被宿主重排到屏幕外（rect 负 X）导致 adb 触摸落在桌面、直接 `am start .CarPlayerActivity` 因无 Flutter 桥接数据呈 0:00 空壳，均属验证环境问题，非代码崩溃（logcat 无 FATAL）。
 - 状态：**未提交 / 未 push / 未打 tag / 未发版**；真车机观感待用户评估。
 
-**2026-11-22 续六十一（未发版）：黑胶圆盘与歌名拉开间距（含超宽屏补偿）**
+**2026-11-22 续六十二（发版）：删除今日旧版重发 v2026.11.22+20287**
+- 触发：用户「删除今天的版本，重新发新版」。本版在 20286 基础上收口续六十一（黑胶圆盘与歌名间距修复）；上文续六十一「未发版」标注以本节为准。
+- 删除：旧 Release `454388195`（v2026.11.22+20286，资产 `jiujiu-music-2026.11.22-20286.apk`）+ 远端 `refs/tags/v2026.11.22`（annotated `9f438a2`）；本地 tag 此前已删。删除后 releases=0 / remote tags=0。
+- 版本号：`pubspec.yaml` `2026.11.22+20286` → `+20287`，`lib/config/app_config.dart` 的 `appVersionCode` 同步 20287；versionName 仍 `2026.11.22`。提交 `0d8dab7`，连同续六十一 `341f9d0` 一起 push master（先 push 再建 tag，遵循 §6.2）。
+- 重建：annotated tag object `2a034ed` → commit `0d8dab7`；Release id `454421392`，名称 `v2026.11.22+20287 · 黑胶圆盘间距修复`，正文 4383 字符（由 `update.md` 的 `## v2026.11.22` 段生成 + 重发说明，不依赖 tag message）；资产 `jiujiu-music-2026.11.22-20287.apk` 32,127,263 B，md5 `70677c008552913228c3ef2982068e78`，sha256 `d05370eb520c8645686d6628df6f06ba2029cfa2622f5068e948d5c1bab10579`。
+- 验证：`aapt dump badging` 实证 versionCode 20287 / versionName 2026.11.22；`apksigner verify` 正式证书 SHA-256 `76a87e47…` 可覆盖安装；GitHub 资产 `digest` 与本地 sha256 完全一致；线上仅剩 1 个 Release 且为 latest、tag `v2026.11.22^{}` 指向 `0d8dab7`，master 与 origin 同步。构建 `scripts/build-android.bat`（pub get → analyze → assembleRelease 83.4s）exit 0。
+- 沿用续六十两个坑并预先规避：发布载荷直接写字符串 `"make_latest":"true"`（布尔 true 会 422）；构建后立即 `git checkout -- pubspec.lock` 还原镜像 URL 改写，发版 diff 仅版本号两行。
+
+**2026-11-22 续六十一（已随 20287 发布）：黑胶圆盘与歌名拉开间距（含超宽屏补偿）**
 - 用户反馈：切到黑胶（圆盘）形态时「圆盘边缘会和歌名接触」，要求优化圆盘大小。
 - 根因：黑胶是满圆（半径 = size/2），磁带本体却只占 View 宽 96%、上下留白；两者共用 `buildDisc(sizePx)` 的同一尺寸，黑胶底缘正好落在信息区文字顶（20286 实测 1280×720 间距 1px）。且超宽屏下 `sizePx` 由左栏高度决定、比 720P 大约 25%，盘心与歌名位置几乎不变，半径变大会让底缘进一步压住歌名。
 - 实现（仅 `CarPlayerActivity.kt` 黑胶分支）：
@@ -84,7 +92,7 @@ pubspec = version: 2026.11.22+20283
 - 参数取舍（同一设备逐版量化）：k=0.90 → 720P 仅 6px；k=0.84 → 720P 18px 但 1920×720 为 -2px（仍接触）；最终 k=0.84 + 16dp 补偿 → **720P 39px / 1920×720 22px**。固定缩放系数只在一种布局下成立，是续五十六复审教训的延续。
 - 验证（MuMu 192.168.7.53:5555，1280×720 与 1920×720，正式签名 APK）：圆盘底/歌名顶像素量化如上；长按切磁带 / 切回黑胶、切歌刷新文字、音质三档胶囊、盘体旋转与中心封面均正常；磁带形态与歌名间距不受影响；logcat 无 FATAL；`wm size` 验完已 reset。最终交付 APK 重装后再做一次黑胶冒烟，间距与界面一致。
 - 坑：① 换歌后背景变深时，用「列像素 max<45」判定黑胶边界会把深色背景一并算入，量化须换更严格阈值或按圆形边界取样；② `dumpsys activity top` 里的 `0,0-1280,720` 是 Launcher 窗口的 View 树，不代表 CarPlayerActivity 在超宽屏下的实际尺寸。
-- 最终 APK 32,127,263 B / md5 `c78bb97969670af9edae205f66dcafb1` / sha256 `9ac189940e71170c2fd1e7ebe806d40d787dcd01b75d73ca4f82a012b0b338a8`；`aapt` 实证 versionCode 20286 / versionName 2026.11.22，`apksigner` 正式证书 SHA-256 `76a87e47…`。**未 push / 未发版**，随下次发版生效（线上仍为 20286 Release）。
+- 最终 APK 32,127,263 B / md5 `c78bb97969670af9edae205f66dcafb1` / sha256 `9ac189940e71170c2fd1e7ebe806d40d787dcd01b75d73ca4f82a012b0b338a8`；`aapt` 实证 versionCode 20286 / versionName 2026.11.22，`apksigner` 正式证书 SHA-256 `76a87e47…`。该 APK 为发版前验证版；源码已随续六十二的 20287 发布（versionCode 已递增为 20287）。
 
 **2026-11-22 续六十（发版）：删除今日旧版重发 v2026.11.22+20286**
 - 触发：用户「删除今天发布的版本，重新发新版」。本版把续五十三~续五十九共 7 项未发版改动一次性收口；上文各节「未发版」标注以本节为准。
