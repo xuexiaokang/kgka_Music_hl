@@ -79,15 +79,22 @@ pubspec = version: 2026.11.22+20283
 - 用户要求：「上方的歌曲信息可以不用重复显示了；同时把下面的歌名框连同磁盘显示区都往上放一点，现在看起来放太下面了，歌名的字体可以再大一些，整个框的宽度再减短一些」。
 - 实现（仅原生 `CarPlayerActivity.kt`）：
   1. 顶栏删掉 `headerTitle/headerArtist` 两行歌名/歌手，只留返回 / 收藏 / 更多；右栏那两个从未 addView 的 `titleText/artistText` 一并清理。曲目文字改存 `currentTitle/currentArtist` 字段，供「更多」面板标题复用（面板标题仍显示歌名+歌手，实机已验证正常）。
-  2. 左栏整体上移：`leftFrame` 的 LayoutParams 加 `bottomMargin = 48dp`。横屏下左栏**宽度才是短边**（宽 < 高），减小高度不改变 `min(w,h)`，磁带仍按 0.786 黄金比例保持 396×396 原尺寸，只是 `Gravity.CENTER` 的盘面中心随容器上移；贴底的铭牌也同步上移。实机：磁带 y 253→228、铭牌 y 605→545。
+  2. 磁带与铭牌同步上移（**复审后修正，见下方复审段**）：给 `buildDisc()` 里盘面子 View 的 `FrameLayout.LayoutParams` 和铭牌 LP 都加 `bottomMargin = 48dp`，**左栏容器尺寸完全不变**。`FrameLayout` 的 `CENTER_VERTICAL` 居中计算会减去 `bottomMargin`，盘面整体上移该值（不是 margin/2），与铭牌同量、两者间距保持不变。实机：磁带 y 253→200、铭牌 y 605→545。
   3. 铭牌宽度缩短并居中：`FrameLayout` 参数由 `MATCH_PARENT + Gravity.BOTTOM` 改为 `MATCH_PARENT + BOTTOM|CENTER_HORIZONTAL`，左右各 `38dp` margin。实机宽度 502→414px，中心与磁带对齐。
   4. 歌名字号 17→21sp（副标题 12sp、音质徽章不变）。
 - **踩坑（重要）：去掉顶栏歌名后，用带 weight 的空 View 撑开左右按钮，导致整个 bodyRow 被挤成 0 高**。
   - 现象：截图只剩顶栏三个按钮且垂直居中，磁带 / 歌词 / 进度条 / 控制行全部消失；`dumpsys activity top` 显示 header `27,11-1246,679`（高 668）、bodyRow `27,690-1246,690`（高 0）、`CarCassetteView` 节点不存在。
   - 根因：header 原本是 `lpMatchWrap()`（MATCH_PARENT × WRAP_CONTENT），高度靠内部 44dp 按钮撑出来；换成「空 View + weight=1f / WRAP_CONTENT 高」后，该占位在 LinearLayout 测量中被拉伸到父容器可用高度，header 吃掉几乎整屏，weight=1 的 bodyRow 只剩 0。
   - 修复：`content.addView(header, LinearLayout.LayoutParams(MATCH_PARENT, dp(44f)))` 把顶栏高度钉死为按钮高度。改用固定高度后顶栏仍 50px、bodyRow 恢复 607px、磁带与歌词全部回来。**结论：横向 LinearLayout 里用「空 View + weight」占位时，父容器高度必须显式钉死。**
-- **验证**（MuMu 1280×720 @160dpi）：顶栏已无重复歌名；磁带 396×396 完整、上移约 25px 且尺寸未变；铭牌 x 74..488 / y 545..620，歌名 21sp 清晰，与磁带间隙约 75px、无遮挡无裁切；「更多」面板标题「独角戏 / 许茹芸」正常；音质三档联动复测（FLAC 金 → 128K 灰白 → 恢复 FLAC 金）通过；零崩溃。`flutter test` 195 全绿、`flutter analyze` 14 项既有提示无新增、`git diff --check` 干净。
-- 最终 APK md5 `6bf0045b93dc9ffe6ec485d31c616a7b`（32,125,851 B）；**未 push / 未发版**，随下次发版生效。update.md 已补记。
+- **复审（同日）发现并修掉一个真实回归风险**：初版用「`leftFrame` 加 `bottomMargin=48dp` 缩小容器高度」实现上移，隐含假设「左栏宽度是短边」。但 `applyUiScale()` 会按「短边逻辑尺寸/720dp」自动归一，**超宽车机屏（1920×720 等）经归一后左栏高度会成为短边**；此时缩小容器高度会连带把 `min(w,h)` 变小，磁带被算小约 9%。
+  - 修正：移除容器 bottomMargin，改为只给盘面子 View（`cassette` / `discGroup` / `conicSheen` 三处 `FrameLayout.LayoutParams`）和铭牌 LP 各加 `bottomMargin=48dp`。容器尺寸完全不动，盘面尺寸在任何屏幕比例下都不变；且盘面与铭牌同量上移、间距保持不变，比初版（盘面只上移一半、间隙被压缩）更稳。
+  - 另修正初版注释的事实错误：`FrameLayout` 的 `CENTER_VERTICAL` 居中计算是 `center + topMargin - bottomMargin`，上移量为 **bottomMargin 全额**，不是 `margin/2`。
+  - 超宽屏实测（`wm size 1920x720`，验完 `wm size reset` 恢复）：`dumpsys activity top` 显示 leftFrame / discWrap 均为完整 `780×607`（未被压缩）、`CarCassetteView 477×477` 未被算小；铭牌 `43,472-737,552` 与盘面贴图不重叠、无溢出、磁带完整。旧方案在此分辨率下盘面会缩到约 434px。
+  - 复测其它形态：长按切黑胶→圆盘完整上移、铭牌仍在且无遮挡，再长按切回磁带正常；点下一曲→铭牌文字即时刷新为「算了吧 放过你放过我 / 小何」，音质徽章保持；`flutter test -j 1` 195 全绿、`flutter analyze` 14 项既有无新增、`git diff --check` 干净。
+  - 测试环境note：全量 `flutter test`（默认并发）在本次复审中连续 3 次随机报不同文件的 `loading ... / did not complete`（`scroll_to_top_button_test.dart`、`search_suggest_test.dart`），单独跑该文件全绿、`-j 1` 单并发跑全量 195 全绿 → 是本机 MuMu/Gradle 守护进程占用下的并发资源争抢，**不是代码回归**。以后遇此先 `-j 1` 复验，别误判为改动破坏。
+  - **通用教训**：凡是「上移/留白」需求，不要通过缩小承载自适应尺寸计算的容器来实现；只改子 View 的 margin/gravity，容器测量尺寸保持恒定，才能兼容不同屏幕比例与密度归一。
+- **验证**（MuMu 1280×720 @160dpi 基准）：顶栏已无重复歌名；磁带 396×396 完整、上移约 48px 且尺寸未变；铭牌 x 74..488 / y 545..620，歌名 21sp 清晰，与磁带间隙约 105px、无遮挡无裁切；「更多」面板标题「独角戏 / 许茹芸」正常；音质三档联动复测（FLAC 金 → 128K 灰白 → 恢复 FLAC 金）通过；零崩溃。
+- 最终 APK md5 `6f96812f43efb26afeee50011f8bbc10`（32,126,131 B）；**未 push / 未发版**，随下次发版生效。update.md 已补记复审修正。
 - 备注：歌词区首行「独角戏 - 许茹芸 (Valen Hsu)」是 LRC 文件自带的曲目元数据行，属于歌词数据而非 UI 歌曲信息控件，本次未改动；若也要隐藏需改 `CarLyricView` 的歌词过滤逻辑。
 
 **2026-11-22 续五十五（未发版）：磁带机下方新增曲目铭牌（歌名/歌手·专辑/当前音质）**

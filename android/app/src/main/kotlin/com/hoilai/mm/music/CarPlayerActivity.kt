@@ -406,20 +406,23 @@ class CarPlayerActivity : Activity() {
         leftFrame.addView(discWrap, FrameLayout.LayoutParams(
             FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT
         ))
-        // 铭牌不再占满左栏：左右各内缩一段，宽度更短、居中呈现。
+        // 铭牌不再占满左栏：左右各内缩一段，宽度更短、居中呈现；
+        // 底部内缩让铭牌整体上移（与盘面一起抬升，但都不改变左栏容器尺寸）。
         leftFrame.addView(buildTrackInfoBar(), FrameLayout.LayoutParams(
             FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT,
             Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
         ).also {
             it.leftMargin = dp(38f).toInt()
             it.rightMargin = dp(38f).toInt()
+            it.bottomMargin = dp(48f).toInt()
         })
-        // 左栏整体上移：底部让出一段空白，磁带与铭牌一起抬升。
-        // 横屏下左栏宽度才是短边（宽 < 高），减小高度不改变 min(w,h)，
-        // 磁带仍按 0.786 黄金比例保持原尺寸，只是中心随容器一起上移。
+        // 上移只改「子 View 的 margin」，绝不缩小左栏容器高度：
+        // 盘面按 min(宽,高)·0.786 计算，16:9 下宽度是短边没问题，
+        // 但超宽车机屏（1920×720 等）经密度归一后左栏高度会成为短边，
+        // 一旦缩小容器高度就会连带把磁带算小。见 buildDisc 里的 bottomMargin。
         bodyRow.addView(leftFrame, LinearLayout.LayoutParams(
             0, LinearLayout.LayoutParams.MATCH_PARENT, 9f
-        ).also { it.bottomMargin = dp(48f).toInt() })
+        ))
         bodyRow.addView(space(dp(34f).toInt(), 0))
 
         val right = LinearLayout(this).apply {
@@ -742,7 +745,13 @@ class CarPlayerActivity : Activity() {
             disc = null
             val cassette = CarCassetteView(this)
             cassetteView = cassette
-            discWrap.addView(cassette, FrameLayout.LayoutParams(sizePx, sizePx, Gravity.CENTER))
+            discWrap.addView(cassette, FrameLayout.LayoutParams(sizePx, sizePx, Gravity.CENTER).also {
+                // 与铭牌同步上移：FrameLayout 的 CENTER_VERTICAL 居中计算会减去
+                // bottomMargin，盘面整体上移该值（不是 margin/2），与铭牌同量，
+                // 两者间距保持不变。用子 View margin 而非缩小容器，
+                // 保证任何屏幕比例下盘面尺寸都不变。
+                it.bottomMargin = dp(48f).toInt()
+            })
         } else {
             cassetteView = null
             // 旋转组：黑胶盘体(细密纹路位图) + 中心圆形封面。沟槽是径向对称的，
@@ -764,14 +773,18 @@ class CarPlayerActivity : Activity() {
             val coverSize = (sizePx * 0.585f).toInt()
             discGroup.addView(cover, FrameLayout.LayoutParams(coverSize, coverSize, Gravity.CENTER))
 
-            discWrap.addView(discGroup, FrameLayout.LayoutParams(sizePx, sizePx, Gravity.CENTER))
+            discWrap.addView(discGroup, FrameLayout.LayoutParams(sizePx, sizePx, Gravity.CENTER).also {
+                it.bottomMargin = dp(48f).toInt()
+            })
 
             // 静态光泽层(不随盘旋转):大尺度方向光感 + 外缘斜面受光亮弧
             val conicSheen = ImageView(this).apply {
                 setImageBitmap(makeSheenBitmap(sizePx))
                 scaleType = ImageView.ScaleType.FIT_XY
             }
-            discWrap.addView(conicSheen, FrameLayout.LayoutParams(sizePx, sizePx, Gravity.CENTER))
+            discWrap.addView(conicSheen, FrameLayout.LayoutParams(sizePx, sizePx, Gravity.CENTER).also {
+                it.bottomMargin = dp(48f).toInt()
+            })
         }
         // [CASSETTE_EXPERIMENT] END
 
