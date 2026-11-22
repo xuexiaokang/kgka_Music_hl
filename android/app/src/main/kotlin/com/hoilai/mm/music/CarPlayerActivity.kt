@@ -802,15 +802,26 @@ class CarPlayerActivity : Activity() {
             })
         } else {
             cassetteView = null
+            // 黑胶是「满圆」(半径 = size/2)，磁带本体却只占 View 宽的 96%、上下留白；
+            // 两者共用同一 sizePx 时，黑胶底缘会顶到甚至压住下方歌名(1280×720 实测 0 间距)。
+            // 这里外层旋转组与铭牌宽度仍用 sizePx(对齐关系 / margin 不变)，
+            // 只把圆盘实际绘制尺寸收 16% 并在容器内居中 → 底缘上移 (1-k)·sizePx/2，
+            // 配合下方 16dp 额外上移，实机 720P / 超宽屏分别留出 39px / 22px 间距；
+            // 歌名框宽度与盘心不变。
+            val vinylSize = (sizePx * 0.84f).toInt()
+            // 超宽车机屏下 sizePx 由左栏高度决定、比 720P 大约 25%，盘心不变时
+            // 半径变大会把底缘重新压到歌名上；故黑胶在共用 48dp 上移之外再抬 16dp，
+            // 让任意屏幕比例下都有呼吸空间（磁带分支仍保持 48dp 不变）。
+            val vinylBottomMargin = dp(48f).toInt() + dp(16f).toInt()
             // 旋转组：黑胶盘体(细密纹路位图) + 中心圆形封面。沟槽是径向对称的，
             // 所以旋转时只有封面看得出在转，符合网易云观感。
             discGroup = FrameLayout(this)
 
             val vinyl = ImageView(this).apply {
-                setImageBitmap(makeVinylBitmap(sizePx))
+                setImageBitmap(makeVinylBitmap(vinylSize))
                 scaleType = ImageView.ScaleType.FIT_XY
             }
-            discGroup.addView(vinyl, FrameLayout.LayoutParams(sizePx, sizePx, Gravity.CENTER))
+            discGroup.addView(vinyl, FrameLayout.LayoutParams(vinylSize, vinylSize, Gravity.CENTER))
 
             val cover = ImageView(this).apply {
                 // 圆形封面在位图里预抗锯齿(circleize)，故不再用 clipToOutline 硬裁(硬裁边缘有锯齿)
@@ -818,20 +829,22 @@ class CarPlayerActivity : Activity() {
                 scaleType = ImageView.ScaleType.FIT_XY
             }
             disc = cover
-            val coverSize = (sizePx * 0.585f).toInt()
+            val coverSize = (vinylSize * 0.585f).toInt()
             discGroup.addView(cover, FrameLayout.LayoutParams(coverSize, coverSize, Gravity.CENTER))
 
             discWrap.addView(discGroup, FrameLayout.LayoutParams(sizePx, sizePx, Gravity.CENTER).also {
-                it.bottomMargin = dp(48f).toInt()
+                it.bottomMargin = vinylBottomMargin
             })
 
-            // 静态光泽层(不随盘旋转):大尺度方向光感 + 外缘斜面受光亮弧
+            // 静态光泽层(不随盘旋转):大尺度方向光感 + 外缘斜面受光亮弧。
+            // 与圆盘同用 vinylSize；FrameLayout CENTER 的中心与 childHeight 无关，
+            // 同样的 bottomMargin 下亮弧仍精确贴合缩小后的盘缘。
             val conicSheen = ImageView(this).apply {
-                setImageBitmap(makeSheenBitmap(sizePx))
+                setImageBitmap(makeSheenBitmap(vinylSize))
                 scaleType = ImageView.ScaleType.FIT_XY
             }
-            discWrap.addView(conicSheen, FrameLayout.LayoutParams(sizePx, sizePx, Gravity.CENTER).also {
-                it.bottomMargin = dp(48f).toInt()
+            discWrap.addView(conicSheen, FrameLayout.LayoutParams(vinylSize, vinylSize, Gravity.CENTER).also {
+                it.bottomMargin = vinylBottomMargin
             })
         }
         // [CASSETTE_EXPERIMENT] END
