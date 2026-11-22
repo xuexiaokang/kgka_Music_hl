@@ -598,26 +598,22 @@ class CarPlayerActivity : Activity() {
     }
 
     /**
-     * 磁带机下方的信息区：歌名铭牌独占一行 + 音质选择按钮单独放在最下面一行。
-     * 长歌名此前被同行右侧的音质徽章挤占宽度而截断，现在两者分行，歌名可用整框宽度跑马灯。
-     * 歌名框宽度在 buildDisc() 里同步为盘面 sizePx，并与盘面一起水平居中，
-     * 视觉上像卡座面板上的一张铭牌，左右边界与磁带严格对齐。
+     * 磁带机下方的信息区：歌名 / 歌手文字独占一行 + 音质选择按钮单独放在最下面一行。
+     * 不画边框也不铺底色，文字直接浮在背景上；infoCard 宽度在 buildDisc() 里同步为
+     * 盘面 sizePx，配合 CENTER 让文字块与磁带同心对齐。
+     * 长歌名此前被同行右侧的音质徽章挤占宽度而截断，分行后可用整框宽度跑马灯。
      */
     private fun buildTrackInfoBar(): View {
         val stack = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            // 两个子 View 都按水平中心对齐：歌名框与磁带同心，音质按钮单独居中一行。
+            // 两个子 View 都按水平中心对齐：歌名文字与磁带同心，音质按钮单独居中一行。
             gravity = Gravity.CENTER_HORIZONTAL
         }
 
         infoCard = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER_VERTICAL
-            background = GradientDrawable().apply {
-                cornerRadius = dp(10f)
-                setColor(0x2B0B1020.toInt())
-                setStroke(dp(1f).toInt().coerceAtLeast(1), 0x33FFFFFF.toInt())
-            }
+            // 无边框、无底色：只保留内边距，文字靠 WRAP_CONTENT + CENTER 居中于磁带正下方。
+            gravity = Gravity.CENTER
             val h = dp(14f).toInt()
             val v = dp(10f).toInt()
             setPadding(h, v, h, v)
@@ -630,19 +626,25 @@ class CarPlayerActivity : Activity() {
             isSingleLine = true
             ellipsize = android.text.TextUtils.TruncateAt.END
         }
-        infoCard.addView(infoTitle, lpMatchWrap())
-        infoCard.addView(infoSub, lpMatchWrap().also { it.topMargin = dp(3f).toInt() })
-        // 初始占满左栏；首帧 buildDisc() 按盘面真实尺寸改成等宽居中，避免长歌名被挤。
+        // WRAP_CONTENT：短歌名收缩后由父容器居中；超长歌名撑满父宽继续跑马灯，
+        // 两种情况下文字块中心都与磁带一致。
+        infoCard.addView(infoTitle, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT
+        ))
+        infoCard.addView(infoSub, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT
+        ).also { it.topMargin = dp(3f).toInt() })
+        // 初始占满左栏；首帧 buildDisc() 按盘面真实尺寸改成等宽居中。
         stack.addView(infoCard, LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
         ))
 
         infoQualityBox = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
+            // 单行横向胶囊：规格 + 中文名 + 下拉箭头全在一行，绝不换行。
+            orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER
-            minimumWidth = dp(66f).toInt()
-            val h = dp(10f).toInt()
-            val v = dp(5f).toInt()
+            val h = dp(12f).toInt()
+            val v = dp(6f).toInt()
             setPadding(h, v, h, v)
             // 音质徽章本身就是按钮：点击直接弹出三档选择，无需绕「更多」面板。
             isClickable = true
@@ -655,51 +657,42 @@ class CarPlayerActivity : Activity() {
             setTypeface(typeface, android.graphics.Typeface.BOLD)
             gravity = Gravity.CENTER
             maxLines = 1
+            isSingleLine = true
             includeFontPadding = false
         }
-        // 规格行右侧下拉箭头：左 chevron 旋转 -90° 成向下，明确提示「可展开选择」。
+        infoQualityLabel = TextView(this).apply {
+            textSize = 10f
+            gravity = Gravity.CENTER
+            maxLines = 1
+            isSingleLine = true
+            includeFontPadding = false
+        }
+        // 下拉箭头放最右：左 chevron 旋转 -90° 成向下，明确提示「可展开选择」。
         infoQualityArrow = ImageView(this).apply {
             setImageResource(R.drawable.ic_kg_chevron_left)
             rotation = -90f
             scaleType = ImageView.ScaleType.FIT_CENTER
             alpha = 0.8f
         }
-        val badgeRow = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-        }
-        badgeRow.addView(
+        infoQualityBox.addView(
             infoQualityBadge,
             LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
             )
         )
-        badgeRow.addView(
-            infoQualityArrow,
-            LinearLayout.LayoutParams(dp(11f).toInt(), dp(11f).toInt()).also {
-                it.marginStart = dp(2f).toInt()
-            }
-        )
-        infoQualityBox.addView(
-            badgeRow,
-            LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.WRAP_CONTENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            )
-        )
-        infoQualityLabel = TextView(this).apply {
-            textSize = 9.5f
-            gravity = Gravity.CENTER
-            maxLines = 1
-            includeFontPadding = false
-        }
         infoQualityBox.addView(
             infoQualityLabel,
             LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
-            ).also { it.topMargin = dp(2f).toInt() }
+            ).also { it.marginStart = dp(6f).toInt() }
+        )
+        infoQualityBox.addView(
+            infoQualityArrow,
+            LinearLayout.LayoutParams(dp(11f).toInt(), dp(11f).toInt()).also {
+                it.marginStart = dp(4f).toInt()
+            }
         )
         // 音质按钮独立占最下面一行、居中；不再与歌名同行抢宽度。
         stack.addView(
@@ -713,7 +706,7 @@ class CarPlayerActivity : Activity() {
         return stack
     }
 
-    /** 音质徽章：规格大字 + 中文名小字，档位配色（标准灰白 / 高品蓝 / 无损金）。 */
+    /** 音质胶囊：规格 + 中文名 + 箭头同一行，档位配色（标准灰白 / 高品蓝 / 无损金）。 */
     private fun applyTrackQuality() {
         val bgColor: Int
         val badgeColor: Int

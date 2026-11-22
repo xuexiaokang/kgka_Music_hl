@@ -75,6 +75,15 @@ pubspec = version: 2026.11.22+20283
 - **MuMu 实机**：最终 APK md5 `003c9e45125e1fd73f026402e4ad69c0`（26,460,853 B = 25.2MB，versionCode 20282 / versionName 2026.11.21）；放大截图确认新照片外壳、米色标签专辑图（压暗减轻后清晰）、凹槽四周可见棕色卷盘、两轮齿轮清晰、左卷大于右卷；间隔 8 秒两帧卷盘区约 5.7% 像素变化，联动实证。注：验证后段 MuMu 窗口被宿主重排到屏幕外（rect 负 X）导致 adb 触摸落在桌面、直接 `am start .CarPlayerActivity` 因无 Flutter 桥接数据呈 0:00 空壳，均属验证环境问题，非代码崩溃（logcat 无 FATAL）。
 - 状态：**未提交 / 未 push / 未打 tag / 未发版**；真车机观感待用户评估。
 
+**2026-11-22 续五十九（未发版）：歌名区去边框居中、音质按钮改单行**
+- 用户反馈：「磁盘底下的歌名框不需要边框，内容全部居中对齐磁盘；音质按钮里面的文字不要换行，一行显示」。
+- 实现（仅 `CarPlayerActivity.kt`）：
+  1. `infoCard` 去掉 `background`（原半透明深色圆角底 + 1px 白描边），只保留 14dp / 10dp padding；`gravity` 由 `CENTER_VERTICAL` 改 `CENTER`，两个 TextView 的 LayoutParams 由 `MATCH_PARENT` 改 `WRAP_CONTENT`，短歌名收缩后由父容器居中、超长歌名仍撑满父宽继续跑马灯。宽度仍由 `buildDisc(sizePx)` 同步为盘面尺寸，文字块中心与磁带一致。
+  2. `infoQualityBox` 由 `VERTICAL`（规格行 + 中文名行两行）改 `HORIZONTAL` 单行：顺序为规格 → 中文名 → 下拉箭头，删除 `badgeRow` 中间层与 `minimumWidth 66dp`；`infoQualityBadge` / `infoQualityLabel` 都补 `isSingleLine = true`，label 字号 9.5→10sp。`applyTrackQuality()` 的 RippleDrawable 圆角胶囊与档位配色不变。
+- **验证**（MuMu 1280×720 @160dpi）：静态曲目歌名「你是我曾经拼了命爱过的人」、副标题「洋澜一」、音质胶囊「FLAC 无损音质 ⌄」三者中心 x≈281，与磁带中心 x≈284 对齐；无任何边框或底色；音质三档均一行显示（FLAC 无损音质 / 128K 标准音质 / 320K 高品音质），徽章区 RGB 金 `[66,58,42.8]` / 灰白 `[62.2,65.3,70.3]` / 蓝 `[40.3,56,79.7]`，恢复帧与初始帧一致；点按钮弹三档面板正常；超宽 1920×720 下居中与单行均保持、`dumpsys` bounds 同为 `154..620`；长按切黑胶再切回磁带正常；零崩溃。
+- `flutter test -j 1` 首次偶发 `did not complete`（已知本机资源争抢），重跑 195 全绿；`flutter analyze` 14 项既有无新增、`git diff --check` 干净。
+- 最终 APK md5 `69cdf01ec80396479822b68e912ebcd2`（32,126,767 B）；**未 push / 未发版**，随下次发版生效。
+
 **2026-11-22 续五十八（未发版）：曲目铭牌与音质按钮分行，长歌名不再被遮住**
 - 用户反馈：长歌名（如「你来一程我念一生 (深情版)」）被同行右侧的音质徽章挤占宽度而截断；要求「音质选择按钮单独放在最下面」「歌名外框居中和磁带对齐」。
 - 实现（仅原生 `CarPlayerActivity.kt`）：
