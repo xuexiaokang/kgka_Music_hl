@@ -75,6 +75,20 @@ pubspec = version: 2026.11.22+20283
 - **MuMu 实机**：最终 APK md5 `003c9e45125e1fd73f026402e4ad69c0`（26,460,853 B = 25.2MB，versionCode 20282 / versionName 2026.11.21）；放大截图确认新照片外壳、米色标签专辑图（压暗减轻后清晰）、凹槽四周可见棕色卷盘、两轮齿轮清晰、左卷大于右卷；间隔 8 秒两帧卷盘区约 5.7% 像素变化，联动实证。注：验证后段 MuMu 窗口被宿主重排到屏幕外（rect 负 X）导致 adb 触摸落在桌面、直接 `am start .CarPlayerActivity` 因无 Flutter 桥接数据呈 0:00 空壳，均属验证环境问题，非代码崩溃（logcat 无 FATAL）。
 - 状态：**未提交 / 未 push / 未打 tag / 未发版**；真车机观感待用户评估。
 
+**2026-11-22 续五十五（未发版）：磁带机下方新增曲目铭牌（歌名/歌手·专辑/当前音质）**
+- 用户要求：「尝试在磁带机下方显示歌曲名等信息，还有当前的音质」。
+- 实现（原生 `CarPlayerActivity.kt` + Dart `car_player_service.dart`）：
+  1. 左栏改为 `leftFrame`(FrameLayout)：`discWrap` 仍是全宽全高（尺寸语义与旧版完全一致，0.786 黄金比例不变），曲目铭牌作为同层 `Gravity.BOTTOM` 叠层贴底叠加，**不参与 discWrap 测量**。
+  2. 铭牌 = 半透明深色圆角卡片，左侧歌名 17sp 粗体跑马灯 + 歌手·专辑 12sp（专辑名与歌名相同时省略、避免重复），右侧音质徽章两行（规格大字 + 中文名小字）；按档位配色：标准 128K 灰白 / 高品 320K 蓝 / 无损 FLAC 金。
+  3. Dart `_metaMap` 补 `'audioQualityBadge': p.audioQuality.badge`；原生 `onMeta` 读 album/badge 后 `applyTrackQuality()` 刷新徽章文字与配色。`audioQuality.index` 本就在 `_metaSig` 内，切歌/切音质即时重推。
+- **顺带修复一个此前潜藏的严重问题：冷启动直接进车机全屏时磁带盘面全空白**。
+  - 排查链：截图量化左侧 std 仅 14（纯渐变）→ `buildDisc` 日志确认执行、`child=1` → `dumpsys activity top` 显示 `CarCassetteView 0,0-0,0` → `onDraw` 日志一条都没有 → aapt2 证实 45 张贴图资源与资源名都在（R8 只是把文件名混淆成 `res/Av.png` 等，不是资源被裁）。
+  - 根因：`OnLayoutChangeListener` 回调发生在**布局遍历内部**，此时 `buildDisc()` 里 `addView` 的新子 View 不会被本轮 measure/layout，尺寸停在 0，`onDraw` 永不执行；而 `lastDiscSize` 守卫让后续调用直接跳过，再无补救机会。我最初加铭牌时改用「垂直 LinearLayout + weight」放大了时序差异，才让这个老问题稳定复现。
+  - 修复：把 listener 里的构建改为 `discWrap.post { ensureDiscBuilt() }`（排到遍历之后），抽出 `ensureDiscBuilt()` 复用；另外加 `root.post` 首帧兜底 + `onWindowFocusChanged(hasFocus)` 焦点兜底（该时机 View 宽高可靠），三处统一 post。
+- **验证**（MuMu 1280×720 @160dpi）：磁带完整显示（396×396）、铭牌贴底不遮挡不裁切、歌名「独角戏」/「许茹芸 · 好歌茹芸」/ FLAC 金色徽章正确；「更多→音质」切标准→徽章变 `128K 标准音质` 灰白、切高品→`320K 高品音质` 蓝、恢复无损→`FLAC` 金，三档实时联动通过；零崩溃。`flutter test` 195 全绿、`flutter analyze` 14 项既有提示无新增、`git diff --check` 干净。
+- 最终 APK md5 `90ad496a63606033994886a917a080ac`（32,125,851 B）；提交 `1d9f111`（**未 push / 未发版**，随下次发版生效）。update.md 已补记。
+- 坑：① `minWidth` 在 Kotlin 里是 `minimumWidth`，写错会编译失败；② `adb shell uiautomator dump /sdcard/x.xml` 在 Git Bash 会被 MSYS 路径转换成 Windows 路径，须加 `MSYS_NO_PATHCONV=1`；③ 冷启动后 `user_rotation` 会回到 0，需重新强制横屏；④ 连续两次 `input tap` 间隔太短时第二次会打在转场中间态，须分两次执行；⑤ `dumpsys activity top` 会同时 dump 其它 App（酷我车机版）的层级，要按 `DecorView ... [CarPlayerActivity]` 定位段；⑥ R8 资源名混淆后按 `cassette6` 在 APK 文件名里 grep 不到是正常的，要用 `aapt2 dump resources` 查资源名。
+
 **2026-11-22 续五十四（未发版）：修复设置里两个外观开关在车机全屏无效**
 - 用户反馈：「歌词非高亮行高斯模糊」「液态玻璃动效」两个设置项，在车机全屏上开关没起作用。
 - 根因：车机全屏是独立原生 Activity。`lyricBlurEnabled` 已在 `_metaMap` 下发，但原生 `onMeta` 完全没读；`liquidGlassEnabled` 连下发都没有；原生也没有任何对应渲染 → 两个开关只在 Flutter 侧生效。
