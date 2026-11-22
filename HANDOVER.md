@@ -75,6 +75,18 @@ pubspec = version: 2026.11.22+20283
 - **MuMu 实机**：最终 APK md5 `003c9e45125e1fd73f026402e4ad69c0`（26,460,853 B = 25.2MB，versionCode 20282 / versionName 2026.11.21）；放大截图确认新照片外壳、米色标签专辑图（压暗减轻后清晰）、凹槽四周可见棕色卷盘、两轮齿轮清晰、左卷大于右卷；间隔 8 秒两帧卷盘区约 5.7% 像素变化，联动实证。注：验证后段 MuMu 窗口被宿主重排到屏幕外（rect 负 X）导致 adb 触摸落在桌面、直接 `am start .CarPlayerActivity` 因无 Flutter 桥接数据呈 0:00 空壳，均属验证环境问题，非代码崩溃（logcat 无 FATAL）。
 - 状态：**未提交 / 未 push / 未打 tag / 未发版**；真车机观感待用户评估。
 
+**2026-11-22 续五十四（未发版）：修复设置里两个外观开关在车机全屏无效**
+- 用户反馈：「歌词非高亮行高斯模糊」「液态玻璃动效」两个设置项，在车机全屏上开关没起作用。
+- 根因：车机全屏是独立原生 Activity。`lyricBlurEnabled` 已在 `_metaMap` 下发，但原生 `onMeta` 完全没读；`liquidGlassEnabled` 连下发都没有；原生也没有任何对应渲染 → 两个开关只在 Flutter 侧生效。
+- 链路打通（三层）：
+  1. Dart `car_player_service.dart`：补 `'liquidGlassEnabled'`；两个开关纳入 `_metaSig`；`open()` 加 `ThemeController.instance.addListener(_onThemeChanged)`、`close()` 移除，车机全屏活跃时切开关即时 `_pushMeta()`（ThemeController 不走 PlayerController listener）。
+  2. 原生 `onMeta` 读两值 → `applyLyricBlur` / `applyLiquidGlass` 落 `car_player_prefs` 并即时应用；`onCreate` 先读落盘值建 UI，首帧不闪。
+  3. 渲染：`CarLyricView.setLyricBlurEnabled()` 按 `abs(i-activeIndex)` 递增 `BlurMaskFilter`（1.4dp/行、上限 6dp，对齐 Dart blurred_lyric_view），高亮行不模糊；开启时 `LAYER_TYPE_SOFTWARE` 保证 MaskFilter 生效，关闭回 `LAYER_TYPE_NONE`。`CarPlayerActivity.AuroraDrawable` 双 RadialGradient 极光（顶部 0x2E4A90FF / 右下 0x1E8A63FF），静态 Drawable 不占 vsync，关闭 `GONE`。
+- 验证（MuMu 1280×720 @160dpi 真实 720P）：双开→非高亮行虚化+蓝紫极光；仅关模糊→歌词锐利、极光仍在；双关→极光消失；双开回归通过。背景量化：A/B（极光开）像素完全一致，C（关）左上蓝通道 79.0→50.1、右中 50.2→35.2，证明两开关独立可控。flutter test 195 全绿。
+- 取舍：歌词模糊开启需软件渲染层，弱车机可能掉帧——与设置副标题「若卡顿建议关闭」一致；关闭态零额外开销。
+- APK md5 `20b2b099f3d15e64b469f8a61f031ede`，提交 `ae153dd` push master（未发版，随下次发版生效）。
+- 坑：720P 设置页两个开关坐标随滚动变化，Flutter 语义树把整页合并成一个 content-desc，uiautomator 无法精确定位 Switch，须按截图实测定（模糊开关约 (1208,275)，液态玻璃约 (1208,414)）。
+
 **2026-11-22 续五十三（未发版）：720P 车机歌词字号微调加大**
 - 用户反馈 v2026.11.22 调小过头，720P 上车机全屏歌词偏小，要求"稍微加大一点"。
 - 方案：**只动基准字号，不动档位体系**。`applyLyricScale` 与 `CarPlayerService._styles()` 基准 48/34/20/20 → 52/37/22/21（约 +8%）；LYRIC_SCALES=[0.58,0.68,0.78,0.88,1.02]、STD=0.68、v3 迁移标志、百分比显示 85/100/114/129/150 全部不变 → 用户已落盘档位零影响，无需新迁移。
