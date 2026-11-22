@@ -1,6 +1,7 @@
 package com.hoilai.mm.music
 
 import android.content.Context
+import android.graphics.BlurMaskFilter
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
@@ -58,6 +59,14 @@ class CarLyricView @JvmOverloads constructor(
     private var density = resources.displayMetrics.density
     private var spScale = resources.displayMetrics.scaledDensity
 
+    // ---- 非高亮行景深模糊（对应 Flutter 设置「歌词非高亮行高斯模糊」）----
+    // 半径随与当前行的距离递增：step 1.4dp/行，上限 6dp，与 Dart 侧
+    // blurred_lyric_view.dart 的 blurStep=1.4 / maxBlurSigma=6 对齐。
+    // BlurMaskFilter 在硬件加速画布上可能被忽略，开启时本 View 切软件层保证生效；
+    // 关闭时回到默认的硬件层，维持「局部脏矩形 + HWUI」的高性能路径。
+    private var lyricBlurEnabled = false
+    private var blurFilters: Array<BlurMaskFilter?> = emptyArray()
+
     private val scroller = OverScroller(context)
     private val dirty = Rect()
 
@@ -97,7 +106,19 @@ class CarLyricView @JvmOverloads constructor(
 
     init {
         applyPaints()
+        rebuildBlurFilters()
     }
+
+    private fun rebuildBlurFilters() {
+        blurFilters = Array(13) { d ->
+            val radius = (1.4f * density * d).coerceAtMost(6.0f * density)
+            if (radius < 0.5f) null else BlurMaskFilter(radius, BlurMaskFilter.Blur.NORMAL)
+        }
+    }
+
+    private fun blurFilterFor(distance: Int): BlurMaskFilter? =
+        if (!lyricBlurEnabled || distance <= 0) null
+        else blurFilters.getOrNull(distance.coerceAtMost(blurFilters.lastIndex))
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
         if (texts.isEmpty()) return false
@@ -203,7 +224,22 @@ class CarLyricView @JvmOverloads constructor(
         (map["transColor"] as? Number)?.let { transBaseColor = it.toInt() }
         (map["showTranslation"] as? Boolean)?.let { showTranslation = it }
         applyPaints()
+        rebuildBlurFilters()
         invalidateLayout()
+        invalidate()
+    }
+
+    /** Flutter 设置「歌词非高亮行高斯模糊」下发入口；仅切换渲染层，不动样式与档位。 */
+    fun setLyricBlurEnabled(enabled: Boolean) {
+        if (lyricBlurEnabled == enabled) return
+        lyricBlurEnabled = enabled
+        setLayerType(if (enabled) View.LAYER_TYPE_SOFTWARE else View.LAYER_TYPE_NONE, null)
+        if (enabled) {
+            rebuildBlurFilters()
+        } else {
+            basePaint.maskFilter = null
+            transBasePaint.maskFilter = null
+        }
         invalidate()
     }
 
@@ -370,6 +406,10 @@ class CarLyricView @JvmOverloads constructor(
                 }
                 if (withTrans) drawTranslation(canvas, translations[i], padX, top, lineHeight[i], hl, activePaint)
             } else {
+                // 非当前行：按距离递增的景深模糊（开关关闭时 filter 为 null，零开销）
+                val filter = blurFilterFor(abs(i - activeIndex))
+                basePaint.maskFilter = filter
+                transBasePaint.maskFilter = filter
                 canvas.drawText(line, padX, mainBaseline(basePaint, top, lineHeight[i], withTrans), basePaint)
                 if (withTrans) drawTranslation(canvas, translations[i], padX, top, lineHeight[i], -1f, basePaint)
             }

@@ -55,6 +55,9 @@ class CarPlayerService {
     _lastSongKey = _songKey(player);
     _lastMetaSig = _metaSig(player);
     player.addListener(_onPlayerChanged);
+    // 液态玻璃开关在 ThemeController 上，不走 PlayerController 的 listener；
+    // 单独监听以便在车机全屏仍活跃时也能即时把 meta 推给原生页。
+    ThemeController.instance.addListener(_onThemeChanged);
     try {
       await _toNative.invokeMethod<void>('open', _payload(player));
       _syncTimer?.cancel();
@@ -70,6 +73,7 @@ class CarPlayerService {
     _syncTimer?.cancel();
     _syncTimer = null;
     _player?.removeListener(_onPlayerChanged);
+    ThemeController.instance.removeListener(_onThemeChanged);
     _player = null;
     _auth = null;
   }
@@ -95,6 +99,8 @@ class CarPlayerService {
         p.audioQuality.index,
         p.playbackSpeed,
         p.desktopLyricsEnabled,
+        p.lyricBlurEnabled,
+        ThemeController.instance.liquidGlassEnabled,
         p.climax?.startTime.inMilliseconds,
       ].join('|');
 
@@ -139,7 +145,10 @@ class CarPlayerService {
       'effectNames': [for (final e in PlayerController.equalizerPresets) e.name],
       'desktopLyricsSupported': p.isDesktopLyricsSupported,
       'desktopLyricsEnabled': p.desktopLyricsEnabled,
+      // 两个外观开关：车机全屏是独立的原生 Activity，必须显式下发，
+      // 否则设置只在 Flutter 侧生效，原生页无变化
       'lyricBlurEnabled': p.lyricBlurEnabled,
+      'liquidGlassEnabled': ThemeController.instance.liquidGlassEnabled,
       'sleepActive': p.isSleepTimerActive,
       'sleepFinishCurrent': p.isSleepFinishCurrentSong,
       'sleepRemainingMs': p.sleepTimerRemaining?.inMilliseconds,
@@ -247,6 +256,10 @@ class CarPlayerService {
     final p = _player;
     if (p == null) return;
     _toNative.invokeMethod<void>('meta', _metaMap(p));
+  }
+
+  void _onThemeChanged() {
+    if (_active) _pushMeta();
   }
 
   Future<void> _onNativeCall(MethodCall call) async {

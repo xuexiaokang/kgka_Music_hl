@@ -6,12 +6,15 @@ import android.graphics.BitmapFactory
 import android.graphics.BitmapShader
 import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.ColorFilter
 import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.Path
+import android.graphics.PixelFormat
 import android.graphics.RadialGradient
 import android.graphics.Shader
 import android.graphics.SweepGradient
+import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
 import android.os.Bundle
 import android.view.Gravity
@@ -43,6 +46,8 @@ class CarPlayerActivity : Activity() {
 
     private lateinit var bgImage: ImageView
     private lateinit var bgView: View
+    /** 液态玻璃动效的流体极光层（静态 Drawable，不产生持续动画帧） */
+    private lateinit var orbView: View
     private lateinit var root: FrameLayout
     private lateinit var lyricView: CarLyricView
     private lateinit var discWrap: FrameLayout
@@ -121,6 +126,9 @@ class CarPlayerActivity : Activity() {
     private var canAddToPlaylist = false   // 仅酷狗源支持添加到自建歌单
     private var songHash = ""              // 供 Flutter 侧从队列定位当前歌曲
     private var lyricScale = 0.68f          // 歌词字号缩放档位（标准 0.68，原生 SharedPreferences 持久化）
+    // Flutter 设置页两个外观开关，经 meta 下发；同时落原生 prefs 供 onCreate 首帧使用
+    private var lyricBlurEnabled = false
+    private var liquidGlassEnabled = true
 
     companion object {
         private const val PREF_NAME = "car_player_prefs"
@@ -128,6 +136,8 @@ class CarPlayerActivity : Activity() {
         private const val PREF_UI_SCALE = "ui_scale"
         // [CASSETTE_EXPERIMENT] 形态持久化 key（删除实验功能时一并移除）
         private const val PREF_SHOW_CASSETTE = "show_cassette"
+        private const val PREF_LYRIC_BLUR = "lyric_blur_enabled"
+        private const val PREF_LIQUID_GLASS = "liquid_glass_enabled"
         // 与 CarPlayerService._styles() 保持一致的基准字号，缩放时按比例重算
         // （2026-11-22 微调：720P 车机上 48/34/20 基准偏小，整体上浮约 8%；
         //  档位组与标准 0.68 不变，用户已选档位与百分比显示完全不受影响）
@@ -240,11 +250,16 @@ class CarPlayerActivity : Activity() {
         window.statusBarColor = Color.TRANSPARENT
         window.navigationBarColor = Color.TRANSPARENT
         // [CASSETTE_EXPERIMENT] 恢复上次选择的盘面形态（默认磁带）
-        showCassette = getSharedPreferences(PREF_NAME, MODE_PRIVATE)
-            .getBoolean(PREF_SHOW_CASSETTE, true)
+        val prefs = getSharedPreferences(PREF_NAME, MODE_PRIVATE)
+        showCassette = prefs.getBoolean(PREF_SHOW_CASSETTE, true)
+        // 两个外观开关：先用上次落盘值建 UI，随后 onMeta 用 Flutter 最新值覆盖
+        lyricBlurEnabled = prefs.getBoolean(PREF_LYRIC_BLUR, false)
+        liquidGlassEnabled = prefs.getBoolean(PREF_LIQUID_GLASS, true)
         // 车机界面缩放：必须在 buildUi 之前生效（dp/sp 随 density 全局缩放）
         applyUiScale(resolveUiScale())
         buildUi()
+        applyLyricBlur(lyricBlurEnabled)
+        applyLiquidGlass(liquidGlassEnabled)
         setDefaultBackground()
 
         (CarPlayerBridge.snapshot)?.let { applySnapshot(it) }
@@ -308,6 +323,14 @@ class CarPlayerActivity : Activity() {
         bgView = View(this)
         root.addView(
             bgView, FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT
+            )
+        )
+        // 液态玻璃动效：叠在背景遮罩之上、内容之下的流体极光层。
+        // 用 GONE 完全移除绘制与合成开销，关闭时零成本。
+        orbView = View(this).apply { background = AuroraDrawable() }
+        root.addView(
+            orbView, FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT
             )
         )
@@ -1423,6 +1446,55 @@ class CarPlayerActivity : Activity() {
         lyricView.setStyles(s)
     }
 
+    /** 「歌词非高亮行高斯模糊」：交给 [CarLyricView] 按行距当前行的距离递增模糊。 */
+    private fun applyLyricBlur(enabled: Boolean) {
+        lyricBlurEnabled = enabled
+        getSharedPreferences(PREF_NAME, MODE_PRIVATE).edit()
+            .putBoolean(PREF_LYRIC_BLUR, enabled).apply()
+        if (::lyricView.isInitialized) lyricView.setLyricBlurEnabled(enabled)
+    }
+
+    /** 「液态玻璃动效」：控制全屏流体极光层的显隐（静态渐变，不引入持续动画帧）。 */
+    private fun applyLiquidGlass(enabled: Boolean) {
+        liquidGlassEnabled = enabled
+        getSharedPreferences(PREF_NAME, MODE_PRIVATE).edit()
+            .putBoolean(PREF_LIQUID_GLASS, enabled).apply()
+        if (::orbView.isInitialized) {
+            orbView.visibility = if (enabled) View.VISIBLE else View.GONE
+        }
+    }
+
+    /**
+     * 流体极光光晕：两层低透明度径向渐变（顶部主题蓝 + 右下副色紫），
+     * 对齐 Flutter [LiquidGlassBackground] 的 showOrbs 视觉（dark: primary .18 / secondary .12）。
+     * 纯静态 Drawable —— 仅在尺寸/开关变化时绘制一次，不占 vsync，弱车机 GPU 无持续负担。
+     */
+    private class AuroraDrawable : Drawable() {
+        private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
+        override fun draw(canvas: Canvas) {
+            val w = bounds.width().toFloat()
+            val h = bounds.height().toFloat()
+            if (w <= 0f || h <= 0f) return
+            // 顶部偏左的主色极光（中心上移出屏，避免硬边）
+            paint.shader = RadialGradient(
+                w * 0.30f, -h * 0.10f, w * 0.78f,
+                intArrayOf(0x2E4A90FF.toInt(), 0x004A90FF.toInt()),
+                null, Shader.TileMode.CLAMP
+            )
+            canvas.drawRect(0f, 0f, w, h, paint)
+            // 右下副色微光
+            paint.shader = RadialGradient(
+                w * 0.96f, h * 1.02f, w * 0.52f,
+                intArrayOf(0x1E8A63FF.toInt(), 0x008A63FF.toInt()),
+                null, Shader.TileMode.CLAMP
+            )
+            canvas.drawRect(0f, 0f, w, h, paint)
+        }
+        override fun setAlpha(alpha: Int) { paint.alpha = alpha }
+        override fun setColorFilter(colorFilter: ColorFilter?) { paint.colorFilter = colorFilter }
+        override fun getOpacity(): Int = PixelFormat.TRANSLUCENT
+    }
+
     private fun showLyricScaleSheet() {
         val rows = LYRIC_SCALES.map { sc ->
             val label = when (sc) {
@@ -1474,6 +1546,10 @@ class CarPlayerActivity : Activity() {
                     .putFloat(PREF_UI_SCALE, s).apply()
             }
         }
+        // Flutter 设置页两个外观开关：车机全屏是独立原生 Activity，必须在此显式接收并应用，
+        // 否则设置只在 Flutter 侧生效，原生页完全无变化。
+        (m["lyricBlurEnabled"] as? Boolean)?.let { applyLyricBlur(it) }
+        (m["liquidGlassEnabled"] as? Boolean)?.let { applyLiquidGlass(it) }
         val t = (m["title"] as? String) ?: ""
         val a = (m["artist"] as? String) ?: ""
         titleText.text = t
