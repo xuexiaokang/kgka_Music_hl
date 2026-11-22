@@ -64,6 +64,7 @@ class CarPlayerActivity : Activity() {
     private var currentTitle = ""
     private var currentArtist = ""
     // 磁带机下方「曲目铭牌」：歌名 / 歌手·专辑 / 当前音质徽章
+    private lateinit var infoCard: LinearLayout
     private lateinit var infoTitle: TextView
     private lateinit var infoSub: TextView
     private lateinit var infoQualityBox: LinearLayout
@@ -409,14 +410,13 @@ class CarPlayerActivity : Activity() {
         leftFrame.addView(discWrap, FrameLayout.LayoutParams(
             FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT
         ))
-        // 铭牌不再占满左栏：左右各内缩一段，宽度更短、居中呈现；
-        // 底部内缩让铭牌整体上移（与盘面一起抬升，但都不改变左栏容器尺寸）。
+        // 信息区（歌名铭牌 + 独立一行音质按钮）整体贴底并同步上移 48dp。
+        // 不再给左右 margin：歌名框宽度由 buildDisc() 校正为盘面 sizePx，
+        // 靠 CENTER_HORIZONTAL 与磁带同心对齐；窄屏下也不会因固定 margin 溢出。
         leftFrame.addView(buildTrackInfoBar(), FrameLayout.LayoutParams(
             FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT,
             Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
         ).also {
-            it.leftMargin = dp(38f).toInt()
-            it.rightMargin = dp(38f).toInt()
             it.bottomMargin = dp(48f).toInt()
         })
         // 上移只改「子 View 的 margin」，绝不缩小左栏容器高度：
@@ -598,13 +598,20 @@ class CarPlayerActivity : Activity() {
     }
 
     /**
-     * 磁带机下方的曲目铭牌：左侧歌名 + 歌手·专辑，右侧当前音质徽章。
-     * 视觉上像卡座面板上的一张半透明铭牌，音质徽章按档位换色，
-     * 呼应真实磁带的「TYPE I / CrO₂ / METAL」位置标签。
+     * 磁带机下方的信息区：歌名铭牌独占一行 + 音质选择按钮单独放在最下面一行。
+     * 长歌名此前被同行右侧的音质徽章挤占宽度而截断，现在两者分行，歌名可用整框宽度跑马灯。
+     * 歌名框宽度在 buildDisc() 里同步为盘面 sizePx，并与盘面一起水平居中，
+     * 视觉上像卡座面板上的一张铭牌，左右边界与磁带严格对齐。
      */
     private fun buildTrackInfoBar(): View {
-        val card = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
+        val stack = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            // 两个子 View 都按水平中心对齐：歌名框与磁带同心，音质按钮单独居中一行。
+            gravity = Gravity.CENTER_HORIZONTAL
+        }
+
+        infoCard = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER_VERTICAL
             background = GradientDrawable().apply {
                 cornerRadius = dp(10f)
@@ -615,11 +622,6 @@ class CarPlayerActivity : Activity() {
             val v = dp(10f).toInt()
             setPadding(h, v, h, v)
         }
-
-        val textCol = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER_VERTICAL
-        }
         infoTitle = marqueeText(21f, 0xF2FFFFFF.toInt(), true)
         infoSub = TextView(this).apply {
             setTextColor(0x9AFFFFFF.toInt())
@@ -628,13 +630,12 @@ class CarPlayerActivity : Activity() {
             isSingleLine = true
             ellipsize = android.text.TextUtils.TruncateAt.END
         }
-        textCol.addView(infoTitle, lpMatchWrap())
-        textCol.addView(infoSub, lpMatchWrap().also { it.topMargin = dp(3f).toInt() })
-        card.addView(
-            textCol,
-            LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
-        )
-        card.addView(space(dp(12f).toInt(), 0))
+        infoCard.addView(infoTitle, lpMatchWrap())
+        infoCard.addView(infoSub, lpMatchWrap().also { it.topMargin = dp(3f).toInt() })
+        // 初始占满左栏；首帧 buildDisc() 按盘面真实尺寸改成等宽居中，避免长歌名被挤。
+        stack.addView(infoCard, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
+        ))
 
         infoQualityBox = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -700,15 +701,16 @@ class CarPlayerActivity : Activity() {
                 LinearLayout.LayoutParams.WRAP_CONTENT
             ).also { it.topMargin = dp(2f).toInt() }
         )
-        card.addView(
+        // 音质按钮独立占最下面一行、居中；不再与歌名同行抢宽度。
+        stack.addView(
             infoQualityBox,
             LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
-            )
+            ).also { it.topMargin = dp(10f).toInt() }
         )
         applyTrackQuality()
-        return card
+        return stack
     }
 
     /** 音质徽章：规格大字 + 中文名小字，档位配色（标准灰白 / 高品蓝 / 无损金）。 */
@@ -780,6 +782,14 @@ class CarPlayerActivity : Activity() {
 
     /** 网易云风黑胶：细密沟槽盘体 + 中心封面(0.585R) + 静态方向光感/边缘亮弧；盘体随 discGroup 旋转。 */
     private fun buildDisc(sizePx: Int) {
+        // 歌名铭牌与盘面等宽、同心：盘面按 min(w,h)·0.786 算出 sizePx，
+        // 同一数值直接给铭牌，任何屏幕比例下两者左右边界都严格对齐。
+        // 只在宽度变化时赋值，避免触发无意义的 relayout 循环。
+        val cardLp = infoCard.layoutParams as? LinearLayout.LayoutParams
+        if (cardLp != null && cardLp.width != sizePx) {
+            cardLp.width = sizePx
+            infoCard.layoutParams = cardLp
+        }
         discWrap.removeAllViews()
 
         // [CASSETTE_EXPERIMENT] BEGIN —— 黑胶 / 磁带二选一，删除时移除本 if 分支的磁带侧即可
