@@ -1,6 +1,7 @@
 package com.hoilai.mm.music
 
 import android.app.Activity
+import android.content.res.ColorStateList
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.BitmapShader
@@ -16,6 +17,7 @@ import android.graphics.Shader
 import android.graphics.SweepGradient
 import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
+import android.graphics.drawable.RippleDrawable
 import android.os.Bundle
 import android.view.Gravity
 import android.view.View
@@ -67,6 +69,7 @@ class CarPlayerActivity : Activity() {
     private lateinit var infoQualityBox: LinearLayout
     private lateinit var infoQualityBadge: TextView
     private lateinit var infoQualityLabel: TextView
+    private lateinit var infoQualityArrow: ImageView
     private lateinit var seek: SeekBar
     private lateinit var seekRow: LinearLayout
     private lateinit var climaxDot: View
@@ -640,6 +643,11 @@ class CarPlayerActivity : Activity() {
             val h = dp(10f).toInt()
             val v = dp(5f).toInt()
             setPadding(h, v, h, v)
+            // 音质徽章本身就是按钮：点击直接弹出三档选择，无需绕「更多」面板。
+            isClickable = true
+            isFocusable = true
+            contentDescription = "切换音质"
+            setOnClickListener { showQualitySheet() }
         }
         infoQualityBadge = TextView(this).apply {
             textSize = 13f
@@ -648,19 +656,43 @@ class CarPlayerActivity : Activity() {
             maxLines = 1
             includeFontPadding = false
         }
-        infoQualityLabel = TextView(this).apply {
-            textSize = 9.5f
-            gravity = Gravity.CENTER
-            maxLines = 1
-            includeFontPadding = false
+        // 规格行右侧下拉箭头：左 chevron 旋转 -90° 成向下，明确提示「可展开选择」。
+        infoQualityArrow = ImageView(this).apply {
+            setImageResource(R.drawable.ic_kg_chevron_left)
+            rotation = -90f
+            scaleType = ImageView.ScaleType.FIT_CENTER
+            alpha = 0.8f
         }
-        infoQualityBox.addView(
+        val badgeRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        badgeRow.addView(
             infoQualityBadge,
             LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
             )
         )
+        badgeRow.addView(
+            infoQualityArrow,
+            LinearLayout.LayoutParams(dp(11f).toInt(), dp(11f).toInt()).also {
+                it.marginStart = dp(2f).toInt()
+            }
+        )
+        infoQualityBox.addView(
+            badgeRow,
+            LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            )
+        )
+        infoQualityLabel = TextView(this).apply {
+            textSize = 9.5f
+            gravity = Gravity.CENTER
+            maxLines = 1
+            includeFontPadding = false
+        }
         infoQualityBox.addView(
             infoQualityLabel,
             LinearLayout.LayoutParams(
@@ -698,12 +730,25 @@ class CarPlayerActivity : Activity() {
                 labelColor = 0x99FFFFFF.toInt()
             }
         }
-        infoQualityBox.background = GradientDrawable().apply {
+        // 可点击按钮：圆角底 + 提亮描边 + 按压 ripple（mask 把水波纹限在圆角内）。
+        val base = GradientDrawable().apply {
             cornerRadius = dp(20f)
             setColor(bgColor)
+            setStroke(
+                dp(1f).toInt().coerceAtLeast(1),
+                (badgeColor and 0x00FFFFFF) or (0x5A shl 24)
+            )
         }
+        val mask = GradientDrawable().apply {
+            cornerRadius = dp(20f)
+            setColor(0xFFFFFFFF.toInt())
+        }
+        infoQualityBox.background = RippleDrawable(
+            ColorStateList.valueOf(0x33FFFFFF.toInt()), base, mask
+        )
         infoQualityBadge.setTextColor(badgeColor)
         infoQualityLabel.setTextColor(labelColor)
+        infoQualityArrow.setColorFilter(badgeColor)
         infoQualityBadge.text = qualityBadge.ifEmpty { "—" }
         infoQualityLabel.text = qualityLabel.ifEmpty { "音质" }
     }
@@ -1342,6 +1387,25 @@ class CarPlayerActivity : Activity() {
         sheet = null
     }
 
+    /**
+     * 音质三档选择面板：铭牌上的音质徽章与「更多」里的音质磁贴共用同一入口，
+     * 选中态取当前 meta 的 qualityIndex；行点击先关面板再发 setQuality，
+     * Flutter 重载歌曲后回推 meta，onMeta 会刷新徽章文字与配色。
+     */
+    private fun showQualitySheet() {
+        openSheet("切换音质", listOf(
+            Row("标准音质", "128K", R.drawable.ic_ms_music_note, selected = qualityIndex == 0) {
+                CarPlayerBridge.sendEvent("setQuality", mapOf("qualityIndex" to 0))
+            },
+            Row("高品音质", "320K", R.drawable.ic_ms_high_quality, selected = qualityIndex == 1) {
+                CarPlayerBridge.sendEvent("setQuality", mapOf("qualityIndex" to 1))
+            },
+            Row("无损音质", "FLAC", R.drawable.ic_ms_graphic_eq, selected = qualityIndex == 2) {
+                CarPlayerBridge.sendEvent("setQuality", mapOf("qualityIndex" to 2))
+            }
+        ), subtitle = "会重新加载当前歌曲并尽量保持播放进度")
+    }
+
     /** 更多面板的一枚网格磁贴。 */
     private class Tile(val icon: Int, val title: String, val subtitle: String?, val onClick: () -> Unit)
 
@@ -1419,17 +1483,7 @@ class CarPlayerActivity : Activity() {
             }, subtitle = "调整音乐播放速度")
         })
         tiles.add(Tile(R.drawable.ic_ms_high_quality, "音质：$qualityLabel", "切换当前播放音质") {
-            openSheet("切换音质", listOf(
-                Row("标准音质", "128K", R.drawable.ic_ms_music_note, selected = qualityIndex == 0) {
-                    CarPlayerBridge.sendEvent("setQuality", mapOf("qualityIndex" to 0))
-                },
-                Row("高品音质", "320K", R.drawable.ic_ms_high_quality, selected = qualityIndex == 1) {
-                    CarPlayerBridge.sendEvent("setQuality", mapOf("qualityIndex" to 1))
-                },
-                Row("无损音质", "FLAC", R.drawable.ic_ms_graphic_eq, selected = qualityIndex == 2) {
-                    CarPlayerBridge.sendEvent("setQuality", mapOf("qualityIndex" to 2))
-                }
-            ), subtitle = "会重新加载当前歌曲并尽量保持播放进度")
+            showQualitySheet()
         })
         tiles.add(Tile(R.drawable.ic_ms_auto_awesome, "试听高潮", "播放歌曲高潮片段") {
             CarPlayerBridge.sendEvent("climax")

@@ -75,6 +75,16 @@ pubspec = version: 2026.11.22+20283
 - **MuMu 实机**：最终 APK md5 `003c9e45125e1fd73f026402e4ad69c0`（26,460,853 B = 25.2MB，versionCode 20282 / versionName 2026.11.21）；放大截图确认新照片外壳、米色标签专辑图（压暗减轻后清晰）、凹槽四周可见棕色卷盘、两轮齿轮清晰、左卷大于右卷；间隔 8 秒两帧卷盘区约 5.7% 像素变化，联动实证。注：验证后段 MuMu 窗口被宿主重排到屏幕外（rect 负 X）导致 adb 触摸落在桌面、直接 `am start .CarPlayerActivity` 因无 Flutter 桥接数据呈 0:00 空壳，均属验证环境问题，非代码崩溃（logcat 无 FATAL）。
 - 状态：**未提交 / 未 push / 未打 tag / 未发版**；真车机观感待用户评估。
 
+**2026-11-22 续五十七（未发版）：车机全屏音质徽章改成可直接点的选择按钮**
+- 用户要求：「车机全屏点音质按钮可以选择不同音质」。此前铭牌上的音质徽章只是显示，切换必须绕「更多 → 音质」磁贴。
+- 实现（仅原生 `CarPlayerActivity.kt`）：
+  1. `infoQualityBox` 设为可点击 / 可聚焦，加 `contentDescription="切换音质"`，`setOnClickListener { showQualitySheet() }`；徽章与 `discWrap` 是同层兄弟 View，点击命中徽章不会传到盘面手势，长按切换 / 滑动切歌不受影响（实机已验证）。
+  2. 视觉上明确「这是按钮」：规格行右侧加下拉箭头（`ic_kg_chevron_left` 旋转 -90°，11dp，随档位着色）；背景改为 `RippleDrawable`（圆角底色 + 提亮描边 + mask 限定水波纹范围），档位配色逻辑不变。新增字段 `infoQualityArrow`。
+  3. 把原内联在 `showMoreSheet()` 音质磁贴里的三档 `openSheet(...)` 抽成 `showQualitySheet()`（标准 128K / 高品 320K / 无损 FLAC，选中态取 `qualityIndex`）；徽章与「更多」磁贴都调用它，避免两套逻辑。行点击仍走 `closeSheet() → sendEvent("setQuality")`，Flutter 重载后回推 meta，`onMeta → applyTrackQuality()` 刷新徽章。
+- **验证**（MuMu 1280×720 @160dpi）：点徽章直接弹出「切换音质」面板，三档齐全、无损带勾选、副标题正确；逐档切换徽章即时变色（`FLAC` 金 → `128K` 灰白 → `320K` 蓝 → 恢复 `FLAC` 金），像素量化徽章区 RGB 分别约 `[71,60,45]` / `[68,68,74]` / `[45,58,85]`，恢复帧与初始帧 md5 完全一致；再次打开面板勾选态跟着变为标准 → 选中态实时正确；从「更多 → 音质」弹出的面板与直接点徽章的截图 md5 完全相同（`fc22d898…`），两入口一致；长按切黑胶再切回磁带正常、徽章带箭头始终显示；零崩溃。`flutter test -j 1` 195 全绿、`flutter analyze` 14 项既有无新增、`git diff --check` 干净。
+- 最终 APK md5 `4134fc8f3b2d682326e039609911c479`（32,126,343 B）；**未 push / 未发版**，随下次发版生效。update.md 已补记。
+- 注：全量 `flutter test` 默认并发仍会偶发随机 `did not complete`（复审时已定位为并发资源争抢），统一用 `-j 1` 复验即可。
+
 **2026-11-22 续五十六（未发版）：曲目铭牌排版调整 + 顶栏测量问题修复**
 - 用户要求：「上方的歌曲信息可以不用重复显示了；同时把下面的歌名框连同磁盘显示区都往上放一点，现在看起来放太下面了，歌名的字体可以再大一些，整个框的宽度再减短一些」。
 - 实现（仅原生 `CarPlayerActivity.kt`）：
