@@ -75,6 +75,14 @@ pubspec = version: 2026.11.22+20283
 - **MuMu 实机**：最终 APK md5 `003c9e45125e1fd73f026402e4ad69c0`（26,460,853 B = 25.2MB，versionCode 20282 / versionName 2026.11.21）；放大截图确认新照片外壳、米色标签专辑图（压暗减轻后清晰）、凹槽四周可见棕色卷盘、两轮齿轮清晰、左卷大于右卷；间隔 8 秒两帧卷盘区约 5.7% 像素变化，联动实证。注：验证后段 MuMu 窗口被宿主重排到屏幕外（rect 负 X）导致 adb 触摸落在桌面、直接 `am start .CarPlayerActivity` 因无 Flutter 桥接数据呈 0:00 空壳，均属验证环境问题，非代码崩溃（logcat 无 FATAL）。
 - 状态：**未提交 / 未 push / 未打 tag / 未发版**；真车机观感待用户评估。
 
+**2026-11-23 续六十三（已撤回）：车机模式「锁定横屏」的尝试——按用户要求撤回，代码不做改动**
+
+- 触发：用户「勾选车机模式后，第一次打开软件，车机模式没有完全生效，进入车机全屏再返回才生效，修复一下」。
+- 定位过程：`ThemeController.applyOrientations` 在车机模式下与 `isTablet` / `landscape_enabled` 走同一条分支——**四个方向全部放开**（只「允许」横屏，不锁定横屏）；而车机布局（`CarLeftPlayerPanel` + 顶栏）只在 `isLandscape && carModeEnabled` 时渲染。于是在「系统自动旋转关闭 + 竖屏锁定」的复现环境下冷启动会停在竖屏普通布局，必须进一次 `CarPlayerActivity`（manifest `sensorLandscape`）掰成横屏再返回才补生效。把车机分支单独改成只传 `landscapeLeft/landscapeRight`（提交 `cc61d92`）后，竖屏锁定冷启动确实首帧即为车机布局（实测 `mCurrentRotation` 提前转为 ROTATION_90，无竖屏闪现）。
+- **用户判定该修改无意义并要求撤回**：其实际使用环境是 MuMu **固定横屏**（`accelerometer_rotation=0` + `user_rotation=1`），该环境下车机模式冷启动本来就正常；只有把模拟器改成竖屏锁定才会复现，**复现条件本身是验证时人为构造的**。已 `git revert cc61d92`（提交 `8d5a5e9`），`applyOrientations` 恢复原样，`update.md` 与本节的相关内容一并撤回；用户模拟器已复位为固定横屏。
+- **纪律（重要，后续必须遵守）**：**不得为验证方便去改用户的 MuMu 模拟器设置**（`wm size` / `wm density` / `user_rotation` / `accelerometer_rotation`）及其横竖屏状态。用户的模拟器固定在横屏，验证就在该状态下做。确实需要竖屏/其它分辨率复现时，先向用户申请，不要自行切换；用完立即复位。
+- 状态：**已撤回（本地提交 `8d5a5e9`）/ 未 push / 未发版**；源码功能内容与线上 20287 一致（不含本次尝试）。
+
 **2026-11-22 续六十二（发版）：删除今日旧版重发 v2026.11.22+20287**
 - 触发：用户「删除今天的版本，重新发新版」。本版在 20286 基础上收口续六十一（黑胶圆盘与歌名间距修复）；上文续六十一「未发版」标注以本节为准。
 - 删除：旧 Release `454388195`（v2026.11.22+20286，资产 `jiujiu-music-2026.11.22-20286.apk`）+ 远端 `refs/tags/v2026.11.22`（annotated `9f438a2`）；本地 tag 此前已删。删除后 releases=0 / remote tags=0。
