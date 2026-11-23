@@ -815,7 +815,8 @@ class CarPlayerActivity : Activity() {
             // 大按钮描边 = badge 去 alpha + 0x5A；这里只把选中档提到 0x99 作为唯一区分
             val stroke = (badge and 0x00FFFFFF) or ((if (selected) 0x99 else 0x5A) shl 24)
             btn.background = GradientDrawable().apply {
-                cornerRadius = dp(8f)
+                // 与音质大胶囊同款 20dp 圆角（端点半圆），保持圆弧外形一致
+                cornerRadius = dp(20f)
                 setColor(bg)
                 setStroke(dp(1f).toInt().coerceAtLeast(1), stroke)
             }
