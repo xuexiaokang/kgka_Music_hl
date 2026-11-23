@@ -75,6 +75,25 @@ pubspec = version: 2026.11.22+20283
 - **MuMu 实机**：最终 APK md5 `003c9e45125e1fd73f026402e4ad69c0`（26,460,853 B = 25.2MB，versionCode 20282 / versionName 2026.11.21）；放大截图确认新照片外壳、米色标签专辑图（压暗减轻后清晰）、凹槽四周可见棕色卷盘、两轮齿轮清晰、左卷大于右卷；间隔 8 秒两帧卷盘区约 5.7% 像素变化，联动实证。注：验证后段 MuMu 窗口被宿主重排到屏幕外（rect 负 X）导致 adb 触摸落在桌面、直接 `am start .CarPlayerActivity` 因无 Flutter 桥接数据呈 0:00 空壳，均属验证环境问题，非代码崩溃（logcat 无 FATAL）。
 - 状态：**未提交 / 未 push / 未打 tag / 未发版**；真车机观感待用户评估。
 
+**2026-11-23 续六十四（未发版）：新增「启动即进全屏播放」开关 + 车机全屏菜单对齐普通横屏底部弹窗**
+
+- 触发：用户「在设置的个性化里增加一个选项开关，启动时自动进入全屏播放界面；车机全屏播放界面的播放列表，设置等弹出的菜单，改成和普通横屏界面一样的菜单，宽度占比等信息都要一样，同时功能都要一样」。
+- 澄清（AskUserQuestion）：①参照界面 = **非车机模式的横屏**（即 `showModalBottomSheet` 的标准底部弹窗）；②功能对齐方向 = **以参照界面为准「补齐」车机全屏缺失的功能**（不是逐条删减）。
+- **改动清单**（提交 `bfd30f2`，6 文件 +336 / −103）：
+  1. `lib/controllers/theme_controller.dart`：新增键 `theme.auto_fullscreen_on_start`、字段/getter `autoFullscreenOnStart`、`load()` 读取、`setAutoFullscreenOnStart(bool)`。
+  2. `lib/ui/pages/settings_page.dart`：个性化分区、`车机界面缩放` 之后插入开关「启动即进全屏播放」（副标题「打开 App 后自动进入全屏播放界面（车机模式下即直接进车机全屏）」）。
+  3. `lib/ui/pages/app_shell.dart`：`_scheduleAutoOpenFullscreenPlayer()` / `_onPlayerChangedForAutoOpen()` / `_autoOpenFullscreenPlayer()`——开关开且已有当前歌曲则下一帧打开；冷启动时「恢复上次播放列表」是异步的，故监听 `PlayerController` 等歌曲就绪后再打开，**只自动打开一次**（`_autoOpenAttempted` 幂等）。
+  4. `lib/services/car_player_service.dart`：`_queueList()` 每项补 `liked`；`handleMethodCall` 新增分支 `likeQueueIndex`（切收藏）、`shareSong`（复制分享信息到剪贴板）。
+  5. `android/app/src/main/kotlin/com/hoilai/mm/music/CarPlayerActivity.kt`（核心，+332/−103）：新增 `sheetWidth()`（= min(屏宽, 640dp)）与 `sheetMaxHeight()`（= 9/16 屏高）两个通用约束；`showQueue()` 由「满宽 × 62% 屏高」改为与 Flutter 侧一致的居中贴底弹窗（宽 min(屏宽,640dp)、顶部 28dp 圆角、32×4 拖拽把手、每行补收藏心形按钮）；`showMoreSheet()` 由「左侧滑入 2 列网格卡片」重写为 `scrim(0x8A000000) > panel(surface, 顶部 28dp 圆角) > ScrollView > Padding(16,0,16,18)[ 歌曲信息行 + 8dp 间距 + card(surfaceContainer, 圆角 16){ 3 列网格 + Divider(indent16) + 列表行 + Divider(indent58) } ]`，panel 用 `measure/layout` 实现高度自适应并封顶 9/16 屏高、`gravity=BOTTOM|CENTER_HORIZONTAL`。网格项与 Flutter 侧 `_showMoreSheet` 对齐：倍速/音质/音效(条件)/试听高潮/定时播放/桌面歌词(条件)/下一首/歌词字号（车机独有，保留）；列表行为详细信息/查看评论(条件 canComment)/添加到歌单(条件 canAddToPlaylist)。新增辅助 `buildSheetSongInfo()` / `sheetGridItem()` / `sheetRow()` / `sheetDivider()` / `speedText()`。
+  6. 新增资源 `android/app/src/main/res/drawable/ic_ms_share.xml`（分享图标）。
+- **MuMu 实机验证（全程保持用户固定横屏 `accelerometer_rotation=0` + `user_rotation=1`，未改任何 `wm size/density/rotation`）**：
+  - 车机模式 ON + 新开关 ON → `am force-stop` + `am start .MainActivity` 冷启动，`mCurrentFocus` 直接为 `com.hoilai.mm.music/.CarPlayerActivity`，首屏即车机全屏（全屏封面 + 歌词 + 大号控制），**开关生效**。
+  - 车机模式 OFF + 新开关 ON → 冷启动进入 Flutter 全屏播放页（`app_shell` 的播放页覆盖层），开关在非车机模式同样生效。注：非车机横屏下播放页沿用竖屏翻页布局（`player_page.dart` 注释「横屏分栏布局是车机专属，普通横屏仍用竖屏的翻页布局」），故观感偏空，属**既有设计**，本次未改动。
+  - 车机全屏菜单：队列面板为居中贴底弹窗、宽约 60%（= 640dp × 本机密度）、顶部圆角 + 拖拽把手、每行带收藏心形；点第一行心形变实心红、第二行仍描边 ⇒ 收藏切换与 Flutter 侧同步正常。更多面板为同规格底部弹窗，歌曲信息行（封面/歌名/歌手/分享）+ 3 列网格 + 列表行齐全；点分享弹 Toast「已复制歌曲分享信息到剪贴板」；点「添加到歌单」正常弹出歌单选择（默认收藏 0 首 / 我喜欢 67 首 / 我喜欢听 0 首）；倍速子菜单同为底部弹窗、1.0x 带选中勾。
+  - 装包：`scripts/build-android.bat`（Temurin JDK17 + `--rerun-tasks`），覆盖安装后 `dumpsys package` = versionCode **20287** / versionName **2026.11.22**（本轮**未 bump 版本号**）。
+  - 验证结束时已把设备恢复为用户原状：**车机模式 ON**、新开关保留 ON；旋转状态仍为 `accelerometer_rotation=0` / `user_rotation=1`。
+- 状态：**已提交（本地 `bfd30f2`）/ 未 push / 未打 tag / 未发版**。
+
 **2026-11-23 续六十三（已撤回）：车机模式「锁定横屏」的尝试——按用户要求撤回，代码不做改动**
 
 - 触发：用户「勾选车机模式后，第一次打开软件，车机模式没有完全生效，进入车机全屏再返回才生效，修复一下」。
