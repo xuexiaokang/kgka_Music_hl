@@ -426,6 +426,12 @@ class CarPlayerActivity : Activity() {
         ).also {
             it.bottomMargin = dp(48f).toInt()
         })
+        // 三档音质展开行独立叠在 leftFrame 底部，不参与信息区测量：
+        // 展开/收起只切自身可见性，音质胶囊与歌名铭牌位置始终不动。
+        leftFrame.addView(infoQualityOptions, FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT,
+            Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
+        ).also { it.bottomMargin = dp(6f).toInt() })
         // 上移只改「子 View 的 margin」，绝不缩小左栏容器高度：
         // 盘面按 min(宽,高)·0.786 计算，16:9 下宽度是短边没问题，
         // 但超宽车机屏（1920×720 等）经密度归一后左栏高度会成为短边，
@@ -710,18 +716,12 @@ class CarPlayerActivity : Activity() {
             ).also { it.topMargin = dp(10f).toInt() }
         )
         // 三档音质就地列在音质按钮正下方：点击胶囊展开/收起，点某档即切换。
-        // 信息区整体贴底且下方预留 48dp，展开行落在预留空间内，不挤压磁带。
+        // 无外框、无底色：只保留三枚独立档位胶囊（各自配色见 applyQualityOptions）。
+        // 该行在 buildBody 里单独叠加到 leftFrame，不参与本 stack 测量，故展开不推动胶囊。
         infoQualityOptions = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER
             visibility = View.GONE
-            val pad = dp(6f).toInt()
-            setPadding(pad, pad, pad, pad)
-            background = GradientDrawable().apply {
-                cornerRadius = dp(12f)
-                setColor(0x33000000.toInt())
-                setStroke(dp(1f).toInt().coerceAtLeast(1), 0x33FFFFFF.toInt())
-            }
         }
         listOf("标准 128K" to 0, "高品 320K" to 1, "无损 FLAC" to 2).forEach { (label, idx) ->
             val btn = TextView(this).apply {
@@ -745,13 +745,6 @@ class CarPlayerActivity : Activity() {
                 ).also { if (idx > 0) it.marginStart = dp(4f).toInt() }
             )
         }
-        stack.addView(
-            infoQualityOptions,
-            LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.WRAP_CONTENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            ).also { it.topMargin = dp(6f).toInt() }
-        )
         applyTrackQuality()
         return stack
     }
@@ -808,20 +801,28 @@ class CarPlayerActivity : Activity() {
         infoQualityArrow.rotation = if (toExpand) 90f else -90f
     }
 
-    /** 三档按钮选中态：当前档高亮描边，其余弱描边。 */
+    /** 三档按钮：标准灰白 / 高品蓝 / 无损金，各自配色；选中档更亮，未选中保留色相但弱化。 */
     private fun applyQualityOptions() {
         if (!::infoQualityOptions.isInitialized) return
         qualityOptionViews.forEachIndexed { idx, btn ->
             val selected = idx == qualityIndex
+            val tone = when (idx) {
+                2 -> 0xFFF5D79B.toInt() to 0x2FE3B052.toInt()   // 无损：金
+                1 -> 0xFFB6D2FF.toInt() to 0x2F5C9BFF.toInt()   // 高品：蓝
+                else -> 0xEBFFFFFF.toInt() to 0x26FFFFFF.toInt() // 标准：灰白
+            }
+            val fg = (tone.first and 0x00FFFFFF) or
+                ((if (selected) 0xFF else 0xB3) shl 24)
+            val bg = (tone.second and 0x00FFFFFF) or
+                ((if (selected) 0xFF else 0x70) shl 24)
+            val stroke = (tone.first and 0x00FFFFFF) or
+                ((if (selected) 0x99 else 0x3D) shl 24)
             btn.background = GradientDrawable().apply {
                 cornerRadius = dp(8f)
-                setColor(if (selected) 0x3DFFFFFF.toInt() else 0x12FFFFFF.toInt())
-                setStroke(
-                    dp(1f).toInt().coerceAtLeast(1),
-                    if (selected) 0x99FFFFFF.toInt() else 0x2EFFFFFF.toInt()
-                )
+                setColor(bg)
+                setStroke(dp(1f).toInt().coerceAtLeast(1), stroke)
             }
-            btn.setTextColor(if (selected) 0xFFFFFFFF.toInt() else 0xB3FFFFFF.toInt())
+            btn.setTextColor(fg)
         }
     }
 
