@@ -75,6 +75,24 @@ pubspec = version: 2026.11.22+20283
 - **MuMu 实机**：最终 APK md5 `003c9e45125e1fd73f026402e4ad69c0`（26,460,853 B = 25.2MB，versionCode 20282 / versionName 2026.11.21）；放大截图确认新照片外壳、米色标签专辑图（压暗减轻后清晰）、凹槽四周可见棕色卷盘、两轮齿轮清晰、左卷大于右卷；间隔 8 秒两帧卷盘区约 5.7% 像素变化，联动实证。注：验证后段 MuMu 窗口被宿主重排到屏幕外（rect 负 X）导致 adb 触摸落在桌面、直接 `am start .CarPlayerActivity` 因无 Flutter 桥接数据呈 0:00 空壳，均属验证环境问题，非代码崩溃（logcat 无 FATAL）。
 - 状态：**未提交 / 未 push / 未打 tag / 未发版**；真车机观感待用户评估。
 
+**2026-11-23 续六十五（未发版）：车机「更多」面板恢复左侧滑入 + 歌词视口上下边缘渐隐淡出**
+
+- 触发：用户「车机全屏版的设置还是遵守左侧滑入弹窗是车机专属交互的设计；歌词最上和最下的文字，和边缘直接截断有点突兀，这里处理一下淡入淡出」。
+- 澄清（AskUserQuestion）：①回退范围 = **仅「设置/更多」面板**，`showQueue()` 播放列表保持续六十四的底部弹窗（含每行收藏心形）；②形态 = **参考上游车机全屏的外观设计和功能**，不是「保留底部弹窗内容只换位置」。据此按 Flutter `showSongActionSheet` 的车机分支（`_buildCarActionDialogContent`）重做原生面板，而非简单 `git revert`。
+- **改动清单**（提交 `6177b55`，3 文件 +202 / −178）：
+  1. `CarPlayerActivity.showMoreSheet()`：从居中贴底 640dp 弹窗重写为车机专属左侧滑入——`scrim(0x80000000) > card(surface, 圆角 16=AppRadius.lg, elevation 12dp 投影, 320dp 宽, 贴左垂直居中, 外边距 24dp)`；头部 = 关闭 X（surfaceContainerHighest @50% 圆形底）+ 曲名(w900)/艺人；内容 = 2 列网格磁贴（列距 10dp、单枚高 = 宽 / 1.35 ≈ 103dp）、surfaceContainer 圆角 16 卡片、图标 22dp / 标题 12sp 粗体 / 副标题 9sp；`translationX = -320dp → 0`，280ms `PathInterpolator(0.215,0.61,0.355,1)` 对齐 `Curves.easeOutCubic`。
+  2. 磁贴功能项沿用旧车机集合并补齐：倍速/音质/试听高潮/音效(条件)/下一首播放/定时/桌面歌词(条件)/歌词设置(条件)/歌词字号/详细信息/查看评论(条件)/添加到歌单(条件)，共 12 项；为避免功能回退，把续六十四底部弹窗头部的**分享**入口补成第 13 枚磁贴（沿用 `shareSong` 事件）。`buildSheetSongInfo()` / `sheetGridItem()` 随之删除。
+  3. 新增 `res/drawable/ic_ms_close.xml`：Material `close_rounded` 标准 X。原 `ic_kg_close.xml` 实为向下箭头，直接复用会与 Flutter 车机弹窗的 X 不一致。
+  4. `CarLyricView.kt`：正文绘制末尾 `drawEdgeFade(canvas)`——顶部/底部各一条 `LinearGradient` 矩形，以 `PorterDuff.Mode.DST_OUT` 按像素 alpha 反向擦除已画字形（边缘 src alpha=1 全擦、渐隐带外 alpha=0 不擦），得到真正的纵向逐像素渐隐；**零 `saveLayer`**，仅两条薄带额外混合。渐隐带 `max(paddingVerticalPx(), activePaint.textSize×0.6)`，默认等于 40dp 上下内边距，静止时首行/末行不被削弱；shader 按 height/band 缓存；`setProgress()` 的局部脏矩形额外 `invalidate` 上下两条薄带，滚动动画本就整块刷新。
+- **MuMu 实机验证（全程固定横屏 `accelerometer_rotation=0` + `user_rotation=1`，未做任何 `wm size/density/rotation` 改动）**：
+  - 车机模式临时打开后冷启动，`mCurrentFocus = .CarPlayerActivity`；点右上「…」→ 更多面板确实**从左侧滑入**，贴左竖居中、约屏宽 29%（320dp × 本机密度）、圆角卡片 + 阴影，头部为标准 X + 曲名「后来我再没打扰过你」/歌手「任夏」，2 列磁贴（倍速 1x / 音质 无损 / 试听高潮 / 音效 关闭 / 下一首播放 / 定时 不开启 / 桌面歌词 已关闭 / 歌词设置 100% …可滚动）。
+  - 点「倍速播放」→ 底部选择面板正常（0.5x~3.0x，1.0x 带勾），`openSheet()` 等子菜单未受影响。
+  - 点播放列表按钮 → **仍是居中贴底弹窗**、每行右侧心形收藏（首行实心红），确认按用户要求未回退。
+  - 歌词视图上下边缘：放大截图确认最上/最下行贴近视口边界处逐像素淡出至消失，背景封面渐变未被擦除，硬截断感消除。
+  - 验证结束已把 App 的车机模式**恢复为验证前的关闭状态**；`auto_fullscreen_on_start` 保持 ON；设备旋转/分辨率始终未变。
+- 构建：`scripts/build-android.bat`（Temurin JDK17），`flutter analyze` 通过，APK 32,144,679 B；本轮**未 bump 版本号**（仍 2026.11.22 / 20287），构建脚本引起的 `pubspec.lock` 镜像 URL 改写已 `git restore` 还原。
+- 状态：**已提交（本地 `6177b55`）/ 未 push / 未打 tag / 未发版**；真车机观感待用户评估。
+
 **2026-11-23 续六十四（未发版）：新增「启动即进全屏播放」开关 + 车机全屏菜单对齐普通横屏底部弹窗**
 
 - 触发：用户「在设置的个性化里增加一个选项开关，启动时自动进入全屏播放界面；车机全屏播放界面的播放列表，设置等弹出的菜单，改成和普通横屏界面一样的菜单，宽度占比等信息都要一样，同时功能都要一样」。
