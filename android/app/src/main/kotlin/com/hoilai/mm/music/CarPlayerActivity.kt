@@ -801,28 +801,25 @@ class CarPlayerActivity : Activity() {
         infoQualityArrow.rotation = if (toExpand) 90f else -90f
     }
 
-    /** 三档按钮：标准灰白 / 高品蓝 / 无损金，各自配色；选中档更亮，未选中保留色相但弱化。 */
+    /** 三档按钮直接复用各自档位大按钮的配色值：标准灰白 / 高品蓝 / 无损金。 */
     private fun applyQualityOptions() {
         if (!::infoQualityOptions.isInitialized) return
         qualityOptionViews.forEachIndexed { idx, btn ->
             val selected = idx == qualityIndex
-            val tone = when (idx) {
-                2 -> 0xFFF5D79B.toInt() to 0x2FE3B052.toInt()   // 无损：金
-                1 -> 0xFFB6D2FF.toInt() to 0x2F5C9BFF.toInt()   // 高品：蓝
-                else -> 0xEBFFFFFF.toInt() to 0x26FFFFFF.toInt() // 标准：灰白
+            // 与 applyTrackQuality() 完全同值：badge=主文字色、label=副文字色、bg=胶囊底色
+            val (badge, label, bg) = when (idx) {
+                2 -> Triple(0xFFF5D79B.toInt(), 0xCCF5D79B.toInt(), 0x2FE3B052.toInt()) // 无损金
+                1 -> Triple(0xFFB6D2FF.toInt(), 0xCCB6D2FF.toInt(), 0x2F5C9BFF.toInt()) // 高品蓝
+                else -> Triple(0xEBFFFFFF.toInt(), 0x99FFFFFF.toInt(), 0x26FFFFFF.toInt()) // 标准灰白
             }
-            val fg = (tone.first and 0x00FFFFFF) or
-                ((if (selected) 0xFF else 0xB3) shl 24)
-            val bg = (tone.second and 0x00FFFFFF) or
-                ((if (selected) 0xFF else 0x70) shl 24)
-            val stroke = (tone.first and 0x00FFFFFF) or
-                ((if (selected) 0x99 else 0x3D) shl 24)
+            // 大按钮描边 = badge 去 alpha + 0x5A；这里只把选中档提到 0x99 作为唯一区分
+            val stroke = (badge and 0x00FFFFFF) or ((if (selected) 0x99 else 0x5A) shl 24)
             btn.background = GradientDrawable().apply {
                 cornerRadius = dp(8f)
                 setColor(bg)
                 setStroke(dp(1f).toInt().coerceAtLeast(1), stroke)
             }
-            btn.setTextColor(fg)
+            btn.setTextColor(if (selected) badge else label)
         }
     }
 
