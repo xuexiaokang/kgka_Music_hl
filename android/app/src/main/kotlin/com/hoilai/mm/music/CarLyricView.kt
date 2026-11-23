@@ -4,8 +4,12 @@ import android.content.Context
 import android.graphics.BlurMaskFilter
 import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.LinearGradient
 import android.graphics.Paint
+import android.graphics.PorterDuff
+import android.graphics.PorterDuffXfermode
 import android.graphics.Rect
+import android.graphics.Shader
 import android.util.AttributeSet
 import android.util.TypedValue
 import android.view.MotionEvent
@@ -26,6 +30,10 @@ import kotlin.math.roundToInt
  * 一小条带，与酷我同路。
  *
  * 数据来源：Dart 侧经 per-view MethodChannel 传 `setLyrics`（行 + 逐字时间）与逐帧 `setProgress`（ms）。
+ *
+ * 唯一例外：视口上下边缘的「淡入淡出」需要把已画的字形按纵向渐变擦淡，用一次 `DST_OUT`
+ * 渐变矩形实现（仍不申请整块离屏 `saveLayer`，只在两条薄带上做混合）；滚动/脏矩形逻辑
+ * 一并把这两条薄带纳入 `invalidate`，保证不残留。
  */
 class CarLyricView @JvmOverloads constructor(
     context: Context,
@@ -33,7 +41,7 @@ class CarLyricView @JvmOverloads constructor(
     defStyleAttr: Int = 0
 ) : View(context, attrs, defStyleAttr) {
 
-    // ---- 画笔（全部纯色直绘，无 Layer / 无 Xfermode）----
+    // ---- 画笔（正文全部纯色直绘；仅边缘淡出用一次 DST_OUT 渐变擦除）----
     private val basePaint = antialiasPaint()       // 非当前行（暗色，小字号）
     private val activeBasePaint = antialiasPaint() // 当前行未唱部分（暗色，大字号，与高亮同尺寸对齐）
     private val activePaint = antialiasPaint()     // 当前行已唱部分（高亮，大字号）
@@ -43,6 +51,18 @@ class CarLyricView @JvmOverloads constructor(
     private fun antialiasPaint() = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         textAlign = Paint.Align.LEFT
     }
+
+    // ---- 视口上下边缘淡入淡出（消除最上/最下行文字被边缘硬截断的突兀感）----
+    // 做法：正文照常直绘，绘制末尾在顶部/底部各画一条线性渐变矩形，用 PorterDuff.DST_OUT
+    // 按像素 alpha 反向擦除已画字形 —— 边缘处全透明、渐隐带外完全不擦，得到真正的逐像素
+    // 纵向渐隐。不申请整块离屏 layer；两条薄带即动画帧的全部额外开销。
+    private val fadeMaskPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        xfermode = PorterDuffXfermode(PorterDuff.Mode.DST_OUT)
+    }
+    private var fadeTopShader: LinearGradient? = null
+    private var fadeBottomShader: LinearGradient? = null
+    private var fadeShaderHeight = -1
+    private var fadeShaderBand = -1f
 
     // ---- 样式（sp/dp 由 Dart 设定，默认对齐现车机横屏样式）----
     private var activeSizeSp = 34f
@@ -288,9 +308,14 @@ class CarLyricView @JvmOverloads constructor(
             scrollToActive(smooth = lastScrolledActive in 0 until texts.size)
             lastScrolledActive = idx
         }
-        // 只刷当前行那一小条脏矩形（HWUI 局部栅格化）
+        // 只刷当前行那一小条脏矩形（HWUI 局部栅格化）+ 上下两条渐隐薄带
         val band = bandRect(idx)
-        if (band != null) invalidate(band) else invalidate()
+        if (band != null) {
+            invalidate(band)
+            invalidateEdgeFade()
+        } else {
+            invalidate()
+        }
     }
 
     // ------------------------------------------------------------------
@@ -354,6 +379,13 @@ class CarLyricView @JvmOverloads constructor(
     private fun paddingVerticalPx() = paddingVerticalDp * density
     private fun paddingHorizontalPx() = paddingHorizontalDp * density
 
+    /**
+     * 上下渐隐带高度：不小于上/下内边距（保证静止时首行/末行完整可读），
+     * 字号放大档位下随正文字号一同变高，避免渐隐过陡。
+     */
+    private fun fadeBandPx(): Float =
+        maxOf(paddingVerticalPx(), activePaint.textSize * 0.6f)
+
     /** 主行与译文之间的固定间距（dp），布局与绘制共用，避免两套公式漂移。 */
     private fun translationGapPx() = (6f * density).roundToInt()
 
@@ -414,6 +446,43 @@ class CarLyricView @JvmOverloads constructor(
                 if (withTrans) drawTranslation(canvas, translations[i], padX, top, lineHeight[i], -1f, basePaint)
             }
         }
+        drawEdgeFade(canvas)
+    }
+
+    /**
+     * 视口上下边缘淡入淡出：在顶部/底部各铺一条线性渐变矩形，以 [PorterDuff.Mode.DST_OUT]
+     * 反向擦除已画字形 —— 边缘处 src alpha = 1（全擦，字形归零），渐隐带外 alpha = 0（不擦），
+     * 中间线性过渡，得到逐像素的纵向渐隐，最上/最下行不再被硬切。
+     *
+     * 语义与原曲库一致：渐隐只发生在内边距带内，静止时首行/末行保持完整不透明度。
+     */
+    private fun drawEdgeFade(canvas: Canvas) {
+        val band = fadeBandPx()
+        val h = height.toFloat()
+        if (band <= 0f || band * 2f >= h) return
+        if (fadeShaderHeight != height || fadeShaderBand != band) {
+            val clear = 0xFF000000.toInt()   // DST_OUT 只看 alpha：此处 alpha=255 → 全擦
+            val keep = 0x00000000            // alpha=0 → 不擦
+            fadeTopShader = LinearGradient(0f, 0f, 0f, band, clear, keep, Shader.TileMode.CLAMP)
+            fadeBottomShader = LinearGradient(0f, h - band, 0f, h, keep, clear, Shader.TileMode.CLAMP)
+            fadeShaderHeight = height
+            fadeShaderBand = band
+        }
+        val w = width.toFloat()
+        fadeMaskPaint.alpha = 255
+        fadeMaskPaint.shader = fadeTopShader
+        canvas.drawRect(0f, 0f, w, band, fadeMaskPaint)
+        fadeMaskPaint.shader = fadeBottomShader
+        canvas.drawRect(0f, h - band, w, h, fadeMaskPaint)
+        fadeMaskPaint.shader = null
+    }
+
+    /** 渐隐带随时段/换行一起重绘（两条薄条，开销远小于整块重栅格）。 */
+    private fun invalidateEdgeFade() {
+        val band = fadeBandPx().toInt()
+        if (band <= 0 || band * 2 >= height) return
+        invalidate(0, 0, width, band)
+        invalidate(0, height - band, width, height)
     }
 
     private fun drawTranslation(
