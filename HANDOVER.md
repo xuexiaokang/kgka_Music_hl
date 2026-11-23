@@ -75,6 +75,16 @@ pubspec = version: 2026.11.22+20283
 - **MuMu 实机**：最终 APK md5 `003c9e45125e1fd73f026402e4ad69c0`（26,460,853 B = 25.2MB，versionCode 20282 / versionName 2026.11.21）；放大截图确认新照片外壳、米色标签专辑图（压暗减轻后清晰）、凹槽四周可见棕色卷盘、两轮齿轮清晰、左卷大于右卷；间隔 8 秒两帧卷盘区约 5.7% 像素变化，联动实证。注：验证后段 MuMu 窗口被宿主重排到屏幕外（rect 负 X）导致 adb 触摸落在桌面、直接 `am start .CarPlayerActivity` 因无 Flutter 桥接数据呈 0:00 空壳，均属验证环境问题，非代码崩溃（logcat 无 FATAL）。
 - 状态：**未提交 / 未 push / 未打 tag / 未发版**；真车机观感待用户评估。
 
+**2026-11-23 续六十八（发版）：新建 v2026.11.23+20288，收口续六十四~续六十七**
+
+- 触发：用户「发版」。澄清策略 = **新建 v2026.11.23+20288，保留线上 11-22 旧 Release**（非删旧重发）。
+- 版本号：`pubspec.yaml` `2026.11.22+20287` → `2026.11.23+20288`，`lib/config/app_config.dart` `appVersion` / `appVersionCode` 同步；`update.md` 新增 `## v2026.11.23` 段汇总本轮四项功能。发布提交 `212b332`（3 文件 +23/−3）。
+- 流程（§6 本地构建 + 手动发布）：先 `git push origin master`（`f4e0928..212b332`，符合「先 push 再打 tag」）→ 构建 `scripts/build-android.bat`（pub get → analyze → assembleRelease 78.8s，exit 0）→ `git checkout -- pubspec.lock` 还原镜像 URL 改写 → Git Data API 建 annotated tag object `f4bba21`（message 中英混排已避免，纯中文）→ `POST /git/refs` 建 `refs/tags/v2026.11.23` → `POST /releases`（id `455047902`，名称 `v2026.11.23+20288 · 车机体验专项更新`，正文 1047 字符由 `update.md` 段 + 构建号/签名/摘要说明组成，`make_latest` 传**字符串** `"true"`）→ `uploads.github.com` 上传资产 `jiujiu-music-2026.11.23-20288.apk`（id `781764981`）。
+- APK 实证：32,144,847 B / md5 `2e1531843214fbca6fe75afe97b6a489` / sha256 `5050d9a1a1121312331d06adb87a46574e062f19b07b543f2be55c30d8185b8d`；`aapt dump badging` = versionCode **20288** / versionName **2026.11.23**；`apksigner verify --print-certs` 正式证书 SHA-256 `76a87e479a20f071…`（与历史一致，可覆盖安装）；GitHub 资产 `digest` 与本地 sha256 完全一致。
+- 线上验证：`GET /releases` = **2 个**（旧 `454421392` / 新 `455047902`，旧版保留）；`GET /releases/latest` = `v2026.11.23` ✅；`GET /git/ref/tags/v2026.11.23` = annotated object `f4bba21`（type=tag）指向 commit `212b332`；`master` 本地与 origin 均为 `212b332`。
+- 坑复用：① `POST /releases` 的 `make_latest` 必须是字符串 `"true"`，传布尔会 422；② 生成 Release 正文时 bash 双引号里的 markdown 反引号会被当命令替换执行，改用 `Write` 直接落 UTF-8 文件再 `--data-binary @file`；③ `cmd //c` 前**不能**加 `MSYS_NO_PATHCONV=1`，否则 apksigner.bat 不执行只显示 cmd 横幅。
+- 状态：**已发版（本地 `212b332` = origin/master = 远端 tag `v2026.11.23` = latest Release）**。
+
 **2026-11-23 续六十七三补正（未发版）：三档小胶囊圆角与大胶囊一致**
 
 - 触发：用户「三档小胶囊的外框弧度和大胶囊一样，是个圆弧」。
