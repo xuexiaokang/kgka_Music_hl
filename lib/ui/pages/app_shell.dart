@@ -55,6 +55,8 @@ class _AppShellState extends State<AppShell>
 
   // 播放页覆盖层
   bool _playerVisible = false;
+  // 「启动即进全屏播放」只自动打开一次。
+  bool _autoOpenAttempted = false;
   late final AnimationController _playerController;
   double _playerDragStartValue = 1.0; // 手势开始时动画值
   double _playerDragDistance = 0; // 跟随手指的累计拖动距离
@@ -67,10 +69,12 @@ class _AppShellState extends State<AppShell>
       vsync: this,
       duration: const Duration(milliseconds: 300),
     );
+    _scheduleAutoOpenFullscreenPlayer();
   }
 
   @override
   void dispose() {
+    widget.player.removeListener(_onPlayerChangedForAutoOpen);
     _playerController.dispose();
     super.dispose();
   }
@@ -78,6 +82,36 @@ class _AppShellState extends State<AppShell>
   void _openPlayer() {
     setState(() => _playerVisible = true);
     _playerController.forward(from: 0);
+  }
+
+  /// 「启动即进全屏播放」：进入主界面后若开关已开且当前有歌，自动打开全屏播放页
+  /// （车机横屏下由播放页接管并拉起原生车机全屏）。
+  void _scheduleAutoOpenFullscreenPlayer() {
+    if (!widget.theme.autoFullscreenOnStart) return;
+    if (widget.player.currentSong != null) {
+      // 已有当前歌曲（如进程存活时重进主界面）：下一帧直接打开。
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _autoOpenFullscreenPlayer();
+      });
+      return;
+    }
+    // 冷启动时「恢复上次播放队列」是异步的，当前歌曲可能还没到位：
+    // 监听播放器，等歌曲出现后再打开（只打开一次）。
+    widget.player.addListener(_onPlayerChangedForAutoOpen);
+  }
+
+  void _onPlayerChangedForAutoOpen() {
+    if (widget.player.currentSong == null) return;
+    _autoOpenFullscreenPlayer();
+  }
+
+  void _autoOpenFullscreenPlayer() {
+    if (!mounted || _autoOpenAttempted) return;
+    _autoOpenAttempted = true;
+    widget.player.removeListener(_onPlayerChangedForAutoOpen);
+    if (_playerVisible) return;
+    if (widget.player.currentSong == null) return;
+    _openPlayer();
   }
 
   void _closePlayer() {

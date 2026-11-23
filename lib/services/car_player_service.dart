@@ -169,6 +169,7 @@ class CarPlayerService {
   /// 播放队列快照，供原生全屏的"歌单/队列"面板展示。
   List<Map<String, dynamic>> _queueList(PlayerController p) {
     final cur = p.currentSong;
+    final auth = _auth;
     return [
       for (var i = 0; i < p.queue.length; i++)
         {
@@ -177,6 +178,10 @@ class CarPlayerService {
           'artist': p.queue[i].artist,
           'coverUrl': p.queue[i].coverUrl,
           'active': cur != null && p.queue[i].hash == cur.hash,
+          // 收藏态：与 Flutter 侧 FavoriteIconButton 完全同源，供原生队列行渲染心形。
+          'liked': auth != null && auth.isLiked(p.queue[i]),
+          // 目前仅酷狗音源支持收藏，非酷狗的行不显示收藏按钮（对齐 FavoriteAction.canToggle）。
+          'canLike': p.queue[i].source == SongSource.kugou,
         },
     ];
   }
@@ -303,6 +308,30 @@ class CarPlayerService {
           await p.playSong(p.queue[idx], queue: p.queue);
         }
         break;
+      case 'likeQueueIndex':
+        // 原生队列行的心形按钮：与 Flutter 侧 FavoriteAction.toggle 同规则，
+        // 唯一的差别是提示走原生 Toast（此时 Flutter 浮层被车机全屏盖住，看不到）。
+        final idx = ((call.arguments as Map?)?['index'] as num?)?.toInt() ?? -1;
+        final auth = _auth;
+        if (p != null && auth != null && idx >= 0 && idx < p.queue.length) {
+          final song = p.queue[idx];
+          if (song.source != SongSource.kugou) {
+            _toNative.invokeMethod<void>('toast', {'text': '该音源暂不支持收藏'});
+          } else if (!auth.isLoggedIn) {
+            _toNative.invokeMethod<void>('toast', {'text': '请先登录后再收藏'});
+          } else if (auth.likedPlaylist == null) {
+            _toNative.invokeMethod<void>('toast', {'text': '收藏列表加载中，请稍后重试'});
+          } else {
+            try {
+              await auth.toggleLike(song);
+            } catch (_) {
+              _toNative.invokeMethod<void>('toast', {'text': '操作失败，请稍后重试'});
+            }
+          }
+          // 回推 meta：原生队列面板可见时会即时重建，心形状态跟着刷新。
+          _pushMeta();
+        }
+        break;
       case 'clearQueue':
         final cur = p?.currentSong;
         if (p != null && cur != null && p.queue.length > 1) {
@@ -316,6 +345,18 @@ class CarPlayerService {
           await p.setPlaybackSpeed(speed.toDouble());
           _pushMeta();
           _pushSync();
+        }
+        break;
+      case 'shareSong':
+        // 原生「更多」弹层的分享按钮：文案在 Dart 侧组装（与普通横屏的分享按钮同源），
+        // 复制到系统剪贴板后由原生弹 Toast（此时 Flutter 浮层被车机全屏盖住）。
+        final song = p?.currentSong;
+        if (song != null) {
+          final shareText = '🎵 推荐歌曲：《${song.title}》 - ${song.artist}'
+              '${song.albumName != null && song.albumName!.isNotEmpty ? '（专辑：${song.albumName}）' : ''}\n'
+              '来自 九九音乐';
+          await Clipboard.setData(ClipboardData(text: shareText));
+          _toNative.invokeMethod<void>('toast', {'text': '已复制歌曲分享信息到剪贴板'});
         }
         break;
       case 'setQuality':

@@ -154,6 +154,9 @@ class CarPlayerActivity : Activity() {
         //  档位组与标准 0.68 不变，用户已选档位与百分比显示完全不受影响）
         private val LYRIC_SCALES = floatArrayOf(0.58f, 0.68f, 0.78f, 0.88f, 1.02f)
         private const val LYRIC_SCALE_STD = 0.68f
+
+        /** 已收藏心形的红色，对齐 Flutter `Colors.redAccent`。 */
+        private val LIKED_RED = 0xFFFF5252.toInt()
         private const val PREF_LYRIC_SCALE_MIGRATED = "lyric_scale_v3_migrated"
     }
 
@@ -1019,6 +1022,20 @@ class CarPlayerActivity : Activity() {
 
     // --------------------------------------------------------- 队列面板
 
+    /**
+     * 弹层宽度：对齐 Flutter `showModalBottomSheet` 的默认约束
+     * `BoxConstraints(maxWidth: 640)`（M3 默认），窄屏时退化为满宽。
+     *
+     * 原生此前三个弹层都用 MATCH_PARENT，在 2560dp 宽的车机屏上会铺满整屏，
+     * 宽度占比和普通横屏的底部弹窗（屏宽 25%）完全对不上。
+     */
+    private fun sheetWidth(): Int =
+        min(resources.displayMetrics.widthPixels, dp(640f).toInt())
+
+    /** 弹层高度上限：对齐 Flutter `showModalBottomSheet` 默认的 9/16 屏高。 */
+    private fun sheetMaxHeight(): Int =
+        (resources.displayMetrics.heightPixels * 9 / 16)
+
     private fun buildQueueOverlay(): FrameLayout {
         val overlay = FrameLayout(this).apply {
             setBackgroundColor(0x99000000.toInt())
@@ -1042,10 +1059,12 @@ class CarPlayerActivity : Activity() {
             background = queuePanelBg
             val padX = dp(16f).toInt()
             setPadding(padX, 0, padX, dp(18f).toInt())
+            // 宽高对齐普通横屏的底部弹窗（showModalBottomSheet 默认约束）：
+            // 宽 = min(屏宽, 640dp) 水平居中贴底；高 = 9/16 屏高（Flutter 侧 ListView
+            // 会撑满这个上限，高度恒定，与曲目多少无关）。
             layoutParams = FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.MATCH_PARENT,
-                (resources.displayMetrics.heightPixels * 0.62f).toInt()
-            ).also { it.gravity = Gravity.BOTTOM }
+                sheetWidth(), sheetMaxHeight()
+            ).also { it.gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL }
             isClickable = true
         }
         // 拖拽把手胶囊 32x4dp（对齐 showDragHandle）
@@ -1128,11 +1147,12 @@ class CarPlayerActivity : Activity() {
                 layoutParams = LinearLayout.LayoutParams(
                     LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
             }
-            // 封面缩略图 40dp，圆角 8（预渲染，无索引号；显示真实封面，不做着色）
+            // 封面缩略图 44dp，圆角 8（对齐 Flutter SongArtwork(size: 44)；预渲染，
+            // 显示真实封面，不做着色）
             val thumb = ImageView(this).apply {
                 scaleType = ImageView.ScaleType.FIT_XY
             }
-            row.addView(thumb, LinearLayout.LayoutParams(dp(40f).toInt(), dp(40f).toInt()).also {
+            row.addView(thumb, LinearLayout.LayoutParams(dp(44f).toInt(), dp(44f).toInt()).also {
                 it.marginEnd = dp(14f).toInt()
             })
             loadThumb(thumb, coverUrl)
@@ -1157,6 +1177,27 @@ class CarPlayerActivity : Activity() {
                     setColorFilter(thPrimary)
                 }, LinearLayout.LayoutParams(dp(24f).toInt(), dp(24f).toInt()).also {
                     it.marginStart = dp(8f).toInt()
+                })
+            }
+            // 行尾收藏按钮：对齐普通横屏队列行的 FavoriteIconButton（同一份 liked 状态、
+            // 同一套"仅酷狗音源可收藏"规则）。仅酷狗音源的行才显示。
+            if (m["canLike"] == true) {
+                val likedItem = m["liked"] == true
+                val heart = ImageButton(this).apply {
+                    setImageResource(
+                        if (likedItem) R.drawable.ic_kg_heart_fill else R.drawable.ic_kg_heart_border
+                    )
+                    setColorFilter(if (likedItem) LIKED_RED else thOnSurfaceVariant)
+                    background = null
+                    scaleType = ImageView.ScaleType.CENTER_INSIDE
+                    setPadding(dp(8f).toInt(), dp(8f).toInt(), dp(8f).toInt(), dp(8f).toInt())
+                    contentDescription = if (likedItem) "取消收藏" else "收藏"
+                    setOnClickListener {
+                        CarPlayerBridge.sendEvent("likeQueueIndex", mapOf("index" to i))
+                    }
+                }
+                row.addView(heart, LinearLayout.LayoutParams(dp(40f).toInt(), dp(40f).toInt()).also {
+                    it.marginStart = dp(6f).toInt()
                 })
             }
             row.setOnClickListener {
@@ -1270,8 +1311,8 @@ class CarPlayerActivity : Activity() {
                 cornerRadii = floatArrayOf(rad, rad, rad, rad, 0f, 0f, 0f, 0f)
             }
             layoutParams = FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT
-            ).also { it.gravity = Gravity.BOTTOM }
+                sheetWidth(), FrameLayout.LayoutParams.WRAP_CONTENT
+            ).also { it.gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL }
             isClickable = true
         }
         // 拖拽把手：32x4，水平居中，色 outlineVariant
@@ -1422,75 +1463,76 @@ class CarPlayerActivity : Activity() {
         ), subtitle = "会重新加载当前歌曲并尽量保持播放进度")
     }
 
-    /** 更多面板的一枚网格磁贴。 */
+    /** 更多面板的一枚网格项/磁贴：图标 + 标题 + 可选副标题。 */
     private class Tile(val icon: Int, val title: String, val subtitle: String?, val onClick: () -> Unit)
 
-    /** 更多面板：左侧滑入圆角卡片 + 关闭X + 曲名头 + 2 列网格磁贴（对齐 Flutter 车机版）。 */
+    /**
+     * 「更多」面板：底部弹层，1:1 对齐**普通横屏**的 `showSongActionSheet`
+     * （非车机分支的 `showModalBottomSheet`）：
+     *   · 宽 min(屏宽, 640dp) 水平居中贴底、顶部 28dp 圆角、32x4 拖拽把手、内容 padding(16,0,16,18)
+     *   · 歌曲信息行（52dp 圆角封面 + 歌名 + 歌手 + 分享）
+     *   · surfaceContainer 卡片（圆角 16）：3 列网格项 + Divider(indent 16) + 列表行 + Divider(indent 58)
+     *   · 高度自适应内容、上限 9/16 屏高（超出由内部 ScrollView 滚动）
+     *
+     * 原先是「左侧滑入 320dp 卡片 + 关闭X + 2 列大磁贴」，对齐的是 Flutter **车机版**分栏页；
+     * 与本 App 普通横屏弹窗的形态和宽度占比都不一致，故按普通横屏重做（功能只增不减）。
+     */
     private fun showMoreSheet() {
         closeSheet()
         val scrim = FrameLayout(this).apply {
-            setBackgroundColor(0x80000000.toInt())
+            // 对齐 showModalBottomSheet 默认 barrierColor（Colors.black54）
+            setBackgroundColor(0x8A000000.toInt())
             isClickable = true
             setOnClickListener { closeSheet() }
             layoutParams = FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT
             )
         }
-        val card = LinearLayout(this).apply {
+        val rad = dp(28f)
+        val panel = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             background = GradientDrawable().apply {
                 shape = GradientDrawable.RECTANGLE
                 setColor(thSurface)
-                cornerRadius = dp(16f)
-            }
-            val pad = dp(16f).toInt()
-            setPadding(pad, pad, pad, pad)
-            layoutParams = FrameLayout.LayoutParams(
-                dp(320f).toInt(), FrameLayout.LayoutParams.MATCH_PARENT
-            ).also {
-                it.gravity = Gravity.START or Gravity.CENTER_VERTICAL
-                it.marginStart = dp(24f).toInt(); it.topMargin = dp(24f).toInt(); it.bottomMargin = dp(24f).toInt()
+                cornerRadii = floatArrayOf(rad, rad, rad, rad, 0f, 0f, 0f, 0f)
             }
             isClickable = true
         }
-        // 头部：关闭 X + 曲名/艺人
-        val header = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-        }
-        val closeColor = (thSurfaceContainerHighest and 0x00FFFFFF) or (0x80 shl 24)
-        header.addView(ImageButton(this).apply {
-            setImageResource(R.drawable.ic_kg_close)
-            setColorFilter(thOnSurface)
+        // 拖拽把手 32x4（对齐 showDragHandle）
+        panel.addView(View(this).apply {
             background = GradientDrawable().apply {
-                shape = GradientDrawable.OVAL; setColor(closeColor)
+                shape = GradientDrawable.RECTANGLE
+                setColor(thOutlineVariant)
+                cornerRadius = dp(2f)
             }
-            scaleType = ImageView.ScaleType.CENTER_INSIDE
-            setPadding(dp(9f).toInt(), dp(9f).toInt(), dp(9f).toInt(), dp(9f).toInt())
-            setOnClickListener { closeSheet() }
-        }, LinearLayout.LayoutParams(dp(40f).toInt(), dp(40f).toInt()))
-        header.addView(LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            addView(TextView(this@CarPlayerActivity).apply {
-                text = currentTitle; maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END
-                setTextColor(thOnSurface); textSize = 17f
-                setTypeface(typeface, android.graphics.Typeface.BOLD)
-            })
-            addView(TextView(this@CarPlayerActivity).apply {
-                text = currentArtist; maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END
-                setTextColor(thOnSurfaceVariant); textSize = 12f
-            }, LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
-            ).also { it.topMargin = dp(2f).toInt() })
-        }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).also {
-            it.marginStart = dp(12f).toInt()
+        }, LinearLayout.LayoutParams(dp(32f).toInt(), dp(4f).toInt()).also {
+            it.gravity = Gravity.CENTER_HORIZONTAL
+            it.topMargin = dp(10f).toInt(); it.bottomMargin = dp(6f).toInt()
         })
-        card.addView(header)
-        card.addView(View(this), LinearLayout.LayoutParams(
-            LinearLayout.LayoutParams.MATCH_PARENT, dp(20f).toInt()))
-        // 磁贴列表（2 列网格，行内等宽 + 10dp 间距，磁贴高≈宽/1.35）
-        val tiles = ArrayList<Tile>()
-        tiles.add(Tile(R.drawable.ic_ms_speed, "倍速播放", speedLabel) {
+
+        val content = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(16f).toInt(), 0, dp(16f).toInt(), dp(18f).toInt())
+        }
+        content.addView(buildSheetSongInfo())
+        content.addView(View(this), LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT, dp(16f).toInt()))
+
+        // ---- 卡片：surfaceContainer + 圆角 16（承载网格项与列表行）
+        val card = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.RECTANGLE
+                setColor(thSurfaceContainer)
+                cornerRadius = dp(16f)
+            }
+        }
+
+        val gridTiles = ArrayList<Tile>()
+        val listRows = ArrayList<Row>()
+
+        // ---- 网格项（顺序与普通横屏的「更多」一致；末尾「歌词字号」是车机全屏独有入口，保留）
+        gridTiles.add(Tile(R.drawable.ic_ms_speed, "倍速", speedLabel) {
             openSheet("倍速播放", listOf(0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 3.0).map { v ->
                 Row(speedText(v), icon = R.drawable.ic_ms_speed,
                     selected = kotlin.math.abs(v - speed) < 0.001) {
@@ -1498,14 +1540,11 @@ class CarPlayerActivity : Activity() {
                 }
             }, subtitle = "调整音乐播放速度")
         })
-        tiles.add(Tile(R.drawable.ic_ms_high_quality, "音质：$qualityLabel", "切换当前播放音质") {
+        gridTiles.add(Tile(R.drawable.ic_ms_high_quality, "音质", qualityBadge.ifEmpty { qualityLabel }) {
             showQualitySheet()
         })
-        tiles.add(Tile(R.drawable.ic_ms_auto_awesome, "试听高潮", "播放歌曲高潮片段") {
-            CarPlayerBridge.sendEvent("climax")
-        })
         if (effectsSupported && effectNames.isNotEmpty()) {
-            tiles.add(Tile(R.drawable.ic_ms_graphic_eq, "音效", effectLabel) {
+            gridTiles.add(Tile(R.drawable.ic_ms_graphic_eq, "音效", effectLabel) {
                 val rows = ArrayList<Row>()
                 rows.add(Row("关闭", icon = R.drawable.ic_ms_power, selected = effectLabel == "关闭") {
                     CarPlayerBridge.sendEvent("setEffect", mapOf("off" to true))
@@ -1519,10 +1558,10 @@ class CarPlayerActivity : Activity() {
                 openSheet("音效", rows, subtitle = "选择音效预设")
             })
         }
-        tiles.add(Tile(R.drawable.ic_ms_playlist_add, "下一首播放", "添加到播放队列") {
-            CarPlayerBridge.sendEvent("playNext")
+        gridTiles.add(Tile(R.drawable.ic_ms_auto_awesome, "高潮", "播放歌曲高潮片段") {
+            CarPlayerBridge.sendEvent("climax")
         })
-        tiles.add(Tile(R.drawable.ic_ms_bedtime, "定时播放", sleepSubtitle()) {
+        gridTiles.add(Tile(R.drawable.ic_ms_bedtime, "定时", sleepSubtitle()) {
             openSheet("定时播放", listOf(
                 Row("不开启", icon = R.drawable.ic_ms_power,
                     selected = !sleepActive && !sleepFinishCurrent) {
@@ -1539,97 +1578,184 @@ class CarPlayerActivity : Activity() {
             ), subtitle = "定时结束后自动暂停播放")
         })
         if (desktopLyricsSupported) {
-            tiles.add(Tile(R.drawable.ic_ms_lyrics, "桌面歌词",
+            gridTiles.add(Tile(R.drawable.ic_ms_lyrics, "桌面歌词",
                 if (desktopLyricsEnabled) "已开启" else "已关闭") {
                 CarPlayerBridge.sendEvent("toggleDesktopLyrics")
             })
             if (desktopLyricsEnabled) {
-                tiles.add(Tile(R.drawable.ic_ms_tune, "歌词设置", "桌面歌词外观") {
+                gridTiles.add(Tile(R.drawable.ic_ms_tune, "歌词设置", null) {
                     CarPlayerBridge.sendEvent("openPage", mapOf("page" to "lyricsSettings"))
                 })
             }
         }
-        // ---- 对齐上游车机播放页的扩展能力 ----
-        tiles.add(Tile(R.drawable.ic_ms_text_size, "歌词字号",
+        gridTiles.add(Tile(R.drawable.ic_ms_playlist_add, "下一首", "添加到播放队列") {
+            CarPlayerBridge.sendEvent("playNext")
+        })
+        gridTiles.add(Tile(R.drawable.ic_ms_text_size, "歌词字号",
             "${(lyricScale / LYRIC_SCALE_STD * 100).toInt()}%") {
             showLyricScaleSheet()
         })
-        tiles.add(Tile(R.drawable.ic_ms_info, "详细信息", "专辑、音源、时长") {
+
+        // ---- 列表行
+        listRows.add(Row("详细信息", "专辑、发行年份、时长、音源", R.drawable.ic_ms_info) {
             CarPlayerBridge.sendEvent("openPage", mapOf(
                 "page" to "songDetail", "songHash" to songHash))
         })
         if (canComment) {
-            tiles.add(Tile(R.drawable.ic_ms_comment, "查看评论", "热门 / 最新") {
+            listRows.add(Row("查看评论", "热门 / 最新、楼层回复", R.drawable.ic_ms_comment) {
                 CarPlayerBridge.sendEvent("openPage", mapOf(
                     "page" to "comments", "songHash" to songHash))
             })
         }
         if (canAddToPlaylist) {
-            tiles.add(Tile(R.drawable.ic_ms_playlist_add, "添加到歌单", "选择自建歌单") {
+            listRows.add(Row("添加到歌单", null, R.drawable.ic_ms_playlist_add) {
                 CarPlayerBridge.sendEvent("openPage", mapOf(
                     "page" to "addToPlaylist", "songHash" to songHash))
             })
         }
-        val grid = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        var i = 0
-        while (i < tiles.size) {
-            val rowLl = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-            rowLl.addView(buildMoreTile(tiles[i]), LinearLayout.LayoutParams(0, dp(100f).toInt(), 1f))
-            if (i + 1 < tiles.size) {
-                rowLl.addView(buildMoreTile(tiles[i + 1]), LinearLayout.LayoutParams(0, dp(100f).toInt(), 1f).also {
-                    it.marginStart = dp(10f).toInt()
-                })
-            } else {
-                rowLl.addView(View(this), LinearLayout.LayoutParams(0, dp(100f).toInt(), 1f).also {
-                    it.marginStart = dp(10f).toInt()
-                })
+
+        if (gridTiles.isNotEmpty()) {
+            // Padding(vertical: 10, horizontal: 12) —— 对齐 Flutter 网格区
+            val gridWrap = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(dp(12f).toInt(), dp(10f).toInt(), dp(12f).toInt(), dp(10f).toInt())
             }
-            grid.addView(rowLl, LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
-            ).also { it.bottomMargin = dp(10f).toInt() })
-            i += 2
+            var gi = 0
+            while (gi < gridTiles.size) {
+                val rowLl = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+                for (c in 0 until 3) {
+                    val idx = gi + c
+                    val cell: View = if (idx < gridTiles.size) {
+                        sheetGridItem(gridTiles[idx])
+                    } else {
+                        // 空位：Flutter 用 SizedBox.shrink()，等宽占位保证三列对齐
+                        View(this)
+                    }
+                    rowLl.addView(cell, LinearLayout.LayoutParams(
+                        0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+                }
+                gridWrap.addView(rowLl, LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
+                gi += 3
+            }
+            card.addView(gridWrap, LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
         }
-        val scroll = ScrollView(this).apply { isVerticalScrollBarEnabled = false }
-        scroll.addView(grid, LinearLayout.LayoutParams(
+        // 网格与列表之间：Divider(height 1, indent 16, endIndent 16)
+        if (gridTiles.isNotEmpty() && listRows.isNotEmpty()) {
+            card.addView(View(this).apply { setBackgroundColor(thOutlineVariant) },
+                LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 1).also {
+                    it.marginStart = dp(16f).toInt(); it.marginEnd = dp(16f).toInt()
+                })
+        }
+        listRows.forEachIndexed { idx, r ->
+            card.addView(sheetRow(r))
+            if (idx < listRows.size - 1) card.addView(sheetDivider())
+        }
+        content.addView(card, LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
-        card.addView(scroll, LinearLayout.LayoutParams(
-            LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f))
-        scrim.addView(card)
+
+        val scroll = ScrollView(this).apply { isVerticalScrollBarEnabled = false }
+        scroll.addView(content, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
+        panel.addView(scroll, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
+
+        // 高度自适应内容、上限 9/16 屏高（与 showModalBottomSheet 默认约束一致），
+        // 超出时内部 ScrollView 滚动；短内容不填充，避免大屏留白。
+        val w = sheetWidth()
+        val maxH = sheetMaxHeight()
+        panel.measure(
+            View.MeasureSpec.makeMeasureSpec(w, View.MeasureSpec.EXACTLY),
+            View.MeasureSpec.makeMeasureSpec(maxH, View.MeasureSpec.AT_MOST)
+        )
+        panel.layoutParams = FrameLayout.LayoutParams(
+            w, panel.measuredHeight.coerceAtMost(maxH)
+        ).also { it.gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL }
+        scrim.addView(panel)
         root.addView(scrim)
         sheet = scrim
     }
 
-    /** 单枚磁贴：圆角 surfaceContainer 底 + 居中(图标/标题/副标题)。 */
-    private fun buildMoreTile(t: Tile): LinearLayout {
+    /** 弹层顶部的歌曲信息行：52dp 圆角封面 + 歌名/歌手 + 分享（对齐普通横屏的弹窗头部）。 */
+    private fun buildSheetSongInfo(): LinearLayout {
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        val art = ImageView(this).apply { scaleType = ImageView.ScaleType.FIT_XY }
+        row.addView(art, LinearLayout.LayoutParams(dp(52f).toInt(), dp(52f).toInt()))
+        loadThumb(art, coverUrl)
+        val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        col.addView(TextView(this).apply {
+            text = currentTitle; maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END
+            setTextColor(thOnSurface); textSize = 16f
+            setTypeface(typeface, android.graphics.Typeface.BOLD)
+        })
+        col.addView(TextView(this).apply {
+            text = currentArtist; maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END
+            setTextColor(thOnSurfaceVariant); textSize = 14f
+        }, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
+        ).also { it.topMargin = dp(2f).toInt() })
+        row.addView(col, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).also {
+            it.marginStart = dp(12f).toInt()
+        })
+        row.addView(ImageButton(this).apply {
+            setImageResource(R.drawable.ic_ms_share)
+            setColorFilter(thOnSurface)
+            background = null
+            scaleType = ImageView.ScaleType.CENTER_INSIDE
+            contentDescription = "分享歌曲"
+            setOnClickListener {
+                closeSheet()
+                // 车机全屏盖住了 Flutter 浮层，文案在 Dart 侧组装、Toast 回原生弹。
+                CarPlayerBridge.sendEvent("shareSong", emptyMap<String, Any>())
+            }
+        }, LinearLayout.LayoutParams(dp(40f).toInt(), dp(40f).toInt()))
+        return row
+    }
+
+    /** 卡片内一枚网格项：42x42 圆角图标底 + 12sp 标题 + 10sp 副标题（对齐 Flutter _GridItem）。 */
+    private fun sheetGridItem(t: Tile): LinearLayout {
         val v = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER
-            background = GradientDrawable().apply {
-                shape = GradientDrawable.RECTANGLE
-                setColor(thSurfaceContainer)
-                cornerRadius = dp(16f)
-            }
-            setPadding(dp(8f).toInt(), dp(6f).toInt(), dp(8f).toInt(), dp(6f).toInt())
+            setPadding(0, dp(4f).toInt(), 0, dp(4f).toInt())
             isClickable = true
             setOnClickListener { closeSheet(); t.onClick() }
         }
-        v.addView(ImageView(this).apply {
+        val box = FrameLayout(this).apply {
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.RECTANGLE
+                // surfaceContainerHighest @ 60%，对齐 _GridItem 的图标底
+                setColor((thSurfaceContainerHighest and 0x00FFFFFF) or (0x99 shl 24))
+                cornerRadius = dp(12f)
+            }
+            isClickable = false
+        }
+        box.addView(ImageView(this).apply {
             setImageResource(t.icon); setColorFilter(thOnSurface)
-        }, LinearLayout.LayoutParams(dp(24f).toInt(), dp(24f).toInt()))
+        }, FrameLayout.LayoutParams(dp(21f).toInt(), dp(21f).toInt()).also {
+            it.gravity = Gravity.CENTER
+        })
+        v.addView(box, LinearLayout.LayoutParams(dp(42f).toInt(), dp(42f).toInt()).also {
+            it.gravity = Gravity.CENTER_HORIZONTAL
+        })
         v.addView(TextView(this).apply {
             text = t.title; maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END
-            gravity = Gravity.CENTER; setTextColor(thOnSurface); textSize = 13f
+            gravity = Gravity.CENTER; setTextColor(thOnSurface); textSize = 12f
             setTypeface(typeface, android.graphics.Typeface.BOLD)
         }, LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
-        ).also { it.topMargin = dp(6f).toInt() })
+        ).also { it.topMargin = dp(5f).toInt() })
         if (t.subtitle != null) {
             v.addView(TextView(this).apply {
                 text = t.subtitle; maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END
                 gravity = Gravity.CENTER; setTextColor(thOnSurfaceVariant); textSize = 10f
             }, LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
-            ).also { it.topMargin = dp(2f).toInt() })
+            ).also { it.topMargin = dp(1f).toInt() })
         }
         return v
     }

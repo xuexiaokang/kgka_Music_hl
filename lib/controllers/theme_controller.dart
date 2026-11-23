@@ -34,6 +34,7 @@ class ThemeController extends ChangeNotifier {
   static const _themeModeKey = 'theme.mode';
   static const _liquidGlassEnabledKey = 'theme.liquid_glass_enabled';
   static const _carModeScaleKey = 'theme.car_mode_scale';
+  static const _autoFullscreenOnStartKey = 'theme.auto_fullscreen_on_start';
 
   /// 车机模式界面缩放档位。
   static const carModeScaleOptions = [0.85, 1.0, 1.15, 1.3, 1.5];
@@ -66,6 +67,7 @@ class ThemeController extends ChangeNotifier {
   double _fontScale = 1.0;
   bool _liquidGlassEnabled = true;
   double _carModeScale = 1.15;
+  bool _autoFullscreenOnStart = false;
   // 车机检测结果缓存（设备不变，启动时检测一次）。
   bool _isAutomotiveDevice = false;
 
@@ -90,6 +92,9 @@ class ThemeController extends ChangeNotifier {
   double get carModeScale => _carModeScale;
   bool get isAutomotiveDevice => _isAutomotiveDevice;
   bool get liquidGlassEnabled => _liquidGlassEnabled;
+
+  /// 启动后是否自动进入全屏播放界面（车机模式下即直接进入车机全屏）。
+  bool get autoFullscreenOnStart => _autoFullscreenOnStart;
 
   /// 是否使用了非默认种子色。
   bool get hasCustomSeedColor => _seedColor != const Color(0xFF1478FF);
@@ -126,6 +131,7 @@ class ThemeController extends ChangeNotifier {
     final themeModeValue = prefs.getString(_themeModeKey);
     _liquidGlassEnabled = prefs.getBool(_liquidGlassEnabledKey) ?? true;
     _carModeScale = prefs.getDouble(_carModeScaleKey) ?? 1.15;
+    _autoFullscreenOnStart = prefs.getBool(_autoFullscreenOnStartKey) ?? false;
     if (themeModeValue != null) {
       _themeMode = switch (themeModeValue) {
         'light' => ThemeMode.light,
@@ -215,6 +221,15 @@ class ThemeController extends ChangeNotifier {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_carModeEnabledKey, enabled);
     applyOrientations(AdaptiveLayout.isTabletByPlatform());
+    notifyListeners();
+  }
+
+  /// 设置「启动后自动进入全屏播放界面」。
+  Future<void> setAutoFullscreenOnStart(bool enabled) async {
+    if (_autoFullscreenOnStart == enabled) return;
+    _autoFullscreenOnStart = enabled;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_autoFullscreenOnStartKey, enabled);
     notifyListeners();
   }
 

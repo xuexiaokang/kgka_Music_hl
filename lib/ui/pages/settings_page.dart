@@ -837,6 +837,15 @@ class SettingsPage extends StatelessWidget {
                     ],
                     _SettingsDivider(),
                     _SettingsSwitchTile(
+                      icon: Icons.fullscreen_rounded,
+                      iconColor: colorScheme.primary,
+                      title: '启动即进全屏播放',
+                      subtitle: '打开 App 后自动进入全屏播放界面（车机模式下即直接进车机全屏）',
+                      value: theme.autoFullscreenOnStart,
+                      onChanged: (value) => theme.setAutoFullscreenOnStart(value),
+                    ),
+                    _SettingsDivider(),
+                    _SettingsSwitchTile(
                       icon: Icons.blur_linear_rounded,
                       iconColor: colorScheme.primary,
                       title: '液态玻璃动效',
