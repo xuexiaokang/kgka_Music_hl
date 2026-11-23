@@ -6,8 +6,6 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.LinearGradient
 import android.graphics.Paint
-import android.graphics.PorterDuff
-import android.graphics.PorterDuffXfermode
 import android.graphics.Rect
 import android.graphics.Shader
 import android.util.AttributeSet
@@ -31,9 +29,9 @@ import kotlin.math.roundToInt
  *
  * 数据来源：Dart 侧经 per-view MethodChannel 传 `setLyrics`（行 + 逐字时间）与逐帧 `setProgress`（ms）。
  *
- * 唯一例外：视口上下边缘的「淡入淡出」需要把已画的字形按纵向渐变擦淡，用一次 `DST_OUT`
- * 渐变矩形实现（仍不申请整块离屏 `saveLayer`，只在两条薄带上做混合）；滚动/脏矩形逻辑
- * 一并把这两条薄带纳入 `invalidate`，保证不残留。
+ * 视口上下边缘的「淡入淡出」直接作用在文字画笔上：每支画笔挂一条覆盖整视图高度的
+ * 纵向 LinearGradient（透明 → 原色 → 原色 → 透明），drawText 时按字形像素的 y 取 alpha，
+ * 因此只有文字渐隐，没有任何矩形遮罩/离屏混合，背景与封面渐变完全不受影响。
  */
 class CarLyricView @JvmOverloads constructor(
     context: Context,
@@ -41,7 +39,7 @@ class CarLyricView @JvmOverloads constructor(
     defStyleAttr: Int = 0
 ) : View(context, attrs, defStyleAttr) {
 
-    // ---- 画笔（正文全部纯色直绘；仅边缘淡出用一次 DST_OUT 渐变擦除）----
+    // ---- 画笔（纯色直绘；边缘渐隐靠画笔自身的纵向 alpha 渐变 shader）----
     private val basePaint = antialiasPaint()       // 非当前行（暗色，小字号）
     private val activeBasePaint = antialiasPaint() // 当前行未唱部分（暗色，大字号，与高亮同尺寸对齐）
     private val activePaint = antialiasPaint()     // 当前行已唱部分（高亮，大字号）
@@ -52,17 +50,14 @@ class CarLyricView @JvmOverloads constructor(
         textAlign = Paint.Align.LEFT
     }
 
-    // ---- 视口上下边缘淡入淡出（消除最上/最下行文字被边缘硬截断的突兀感）----
-    // 做法：正文照常直绘，绘制末尾在顶部/底部各画一条线性渐变矩形，用 PorterDuff.DST_OUT
-    // 按像素 alpha 反向擦除已画字形 —— 边缘处全透明、渐隐带外完全不擦，得到真正的逐像素
-    // 纵向渐隐。不申请整块离屏 layer；两条薄带即动画帧的全部额外开销。
-    private val fadeMaskPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        xfermode = PorterDuffXfermode(PorterDuff.Mode.DST_OUT)
-    }
-    private var fadeTopShader: LinearGradient? = null
-    private var fadeBottomShader: LinearGradient? = null
-    private var fadeShaderHeight = -1
-    private var fadeShaderBand = -1f
+    // ---- 视口上下边缘淡入淡出（只淡文字，不淡窗口）----
+    // 每支文字画笔挂一条覆盖整个视图高度的 LinearGradient：上带 透明→原色、
+    // 下带 原色→透明，中段完全不透明。drawText 按每个字形像素的 y 取 alpha，
+    // 因此文字自身逐像素渐隐；不画任何矩形、不申请离屏 layer，背景/窗口零影响。
+    private var fadeCacheKey = ""
+    private var fadeShaderBase: LinearGradient? = null
+    private var fadeShaderActive: LinearGradient? = null
+    private var fadeShaderTrans: LinearGradient? = null
 
     // ---- 样式（sp/dp 由 Dart 设定，默认对齐现车机横屏样式）----
     private var activeSizeSp = 34f
@@ -308,14 +303,9 @@ class CarLyricView @JvmOverloads constructor(
             scrollToActive(smooth = lastScrolledActive in 0 until texts.size)
             lastScrolledActive = idx
         }
-        // 只刷当前行那一小条脏矩形（HWUI 局部栅格化）+ 上下两条渐隐薄带
+        // 只刷当前行那一小条脏矩形（HWUI 局部栅格化）
         val band = bandRect(idx)
-        if (band != null) {
-            invalidate(band)
-            invalidateEdgeFade()
-        } else {
-            invalidate()
-        }
+        if (band != null) invalidate(band) else invalidate()
     }
 
     // ------------------------------------------------------------------
@@ -412,6 +402,7 @@ class CarLyricView @JvmOverloads constructor(
         if (n == 0) return
         if (lineTop.size != n) invalidateLayout()
 
+        ensureFadeShaders()
         val padX = paddingHorizontalPx()
         val padY = paddingVerticalPx()
 
@@ -446,43 +437,43 @@ class CarLyricView @JvmOverloads constructor(
                 if (withTrans) drawTranslation(canvas, translations[i], padX, top, lineHeight[i], -1f, basePaint)
             }
         }
-        drawEdgeFade(canvas)
     }
 
     /**
-     * 视口上下边缘淡入淡出：在顶部/底部各铺一条线性渐变矩形，以 [PorterDuff.Mode.DST_OUT]
-     * 反向擦除已画字形 —— 边缘处 src alpha = 1（全擦，字形归零），渐隐带外 alpha = 0（不擦），
-     * 中间线性过渡，得到逐像素的纵向渐隐，最上/最下行不再被硬切。
-     *
-     * 语义与原曲库一致：渐隐只发生在内边距带内，静止时首行/末行保持完整不透明度。
+     * 给每支文字画笔装配「上下边缘透明、中间原色」的纵向渐变 shader。
+     * 渐变只改 alpha（RGB 保持原色，避免透明端出现黑边），缓存键含视图高度、
+     * 渐隐带宽度与三种文字颜色，任何一项变化才重建。
      */
-    private fun drawEdgeFade(canvas: Canvas) {
+    private fun ensureFadeShaders() {
         val band = fadeBandPx()
-        val h = height.toFloat()
-        if (band <= 0f || band * 2f >= h) return
-        if (fadeShaderHeight != height || fadeShaderBand != band) {
-            val clear = 0xFF000000.toInt()   // DST_OUT 只看 alpha：此处 alpha=255 → 全擦
-            val keep = 0x00000000            // alpha=0 → 不擦
-            fadeTopShader = LinearGradient(0f, 0f, 0f, band, clear, keep, Shader.TileMode.CLAMP)
-            fadeBottomShader = LinearGradient(0f, h - band, 0f, h, keep, clear, Shader.TileMode.CLAMP)
-            fadeShaderHeight = height
-            fadeShaderBand = band
+        val h = height
+        val key = "$h|$band|${baseColor}|${activeColor}|${transBaseColor}"
+        if (key == fadeCacheKey) return
+        fadeCacheKey = key
+        if (band <= 0f || band * 2f >= h) {
+            fadeShaderBase = null
+            fadeShaderActive = null
+            fadeShaderTrans = null
+        } else {
+            val bh = h.toFloat()
+            fun gradientFor(color: Int): LinearGradient {
+                val transparent = Color.argb(0, Color.red(color), Color.green(color), Color.blue(color))
+                return LinearGradient(
+                    0f, 0f, 0f, bh,
+                    intArrayOf(transparent, color, color, transparent),
+                    floatArrayOf(0f, band / bh, 1f - band / bh, 1f),
+                    Shader.TileMode.CLAMP
+                )
+            }
+            fadeShaderBase = gradientFor(baseColor)
+            fadeShaderActive = gradientFor(activeColor)
+            fadeShaderTrans = gradientFor(transBaseColor)
         }
-        val w = width.toFloat()
-        fadeMaskPaint.alpha = 255
-        fadeMaskPaint.shader = fadeTopShader
-        canvas.drawRect(0f, 0f, w, band, fadeMaskPaint)
-        fadeMaskPaint.shader = fadeBottomShader
-        canvas.drawRect(0f, h - band, w, h, fadeMaskPaint)
-        fadeMaskPaint.shader = null
-    }
-
-    /** 渐隐带随时段/换行一起重绘（两条薄条，开销远小于整块重栅格）。 */
-    private fun invalidateEdgeFade() {
-        val band = fadeBandPx().toInt()
-        if (band <= 0 || band * 2 >= height) return
-        invalidate(0, 0, width, band)
-        invalidate(0, height - band, width, height)
+        basePaint.shader = fadeShaderBase
+        activeBasePaint.shader = fadeShaderBase
+        activePaint.shader = fadeShaderActive
+        transBasePaint.shader = fadeShaderTrans
+        transActivePaint.shader = fadeShaderActive
     }
 
     private fun drawTranslation(
