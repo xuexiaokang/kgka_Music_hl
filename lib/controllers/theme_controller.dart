@@ -219,11 +219,6 @@ class ThemeController extends ChangeNotifier {
   }
 
   /// 动态应用屏幕方向锁定/解锁。
-  ///
-  /// 车机模式的界面**只有横屏形态**（左侧常驻播放面板 + 顶栏），所以开启车机
-  /// 模式时直接**锁定横屏**：否则在竖屏设备（或系统「自动旋转」被关闭）上冷启动，
-  /// 系统只会"允许"横屏而不会主动旋转，App 会停在竖屏的手机版布局，表现为
-  /// 「勾选车机模式后第一次打开没生效，要进车机全屏把它掰成横屏再回来才生效」。
   void applyOrientations(bool isTablet) {
     if (_lastAppliedIsTablet == isTablet &&
         _lastAppliedLandscapeEnabled == _landscapeEnabled &&
@@ -234,13 +229,7 @@ class ThemeController extends ChangeNotifier {
     _lastAppliedLandscapeEnabled = _landscapeEnabled;
     _lastAppliedCarModeEnabled = _carModeEnabled;
 
-    if (_carModeEnabled) {
-      // 车机模式：锁定横屏（允许反向横屏），保证冷启动首帧就是车机布局。
-      SystemChrome.setPreferredOrientations(const [
-        DeviceOrientation.landscapeLeft,
-        DeviceOrientation.landscapeRight,
-      ]);
-    } else if (isTablet || _landscapeEnabled) {
+    if (isTablet || _landscapeEnabled || _carModeEnabled) {
       SystemChrome.setPreferredOrientations(const [
         DeviceOrientation.portraitUp,
         DeviceOrientation.portraitDown,
