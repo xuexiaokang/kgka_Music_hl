@@ -128,10 +128,7 @@ class _AboutPageState extends State<AboutPage> {
                   separatorBuilder: (_, _) => const SizedBox(height: 10),
                   itemBuilder: (context, index) {
                     final version = _versions[index];
-                    return _VersionCard(
-                      version: version,
-                      initiallyExpanded: index == 0,
-                    );
+                    return _VersionCard(version: version);
                   },
                 ),
               ),
