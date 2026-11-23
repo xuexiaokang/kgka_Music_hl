@@ -75,6 +75,29 @@ pubspec = version: 2026.11.22+20283
 - **MuMu 实机**：最终 APK md5 `003c9e45125e1fd73f026402e4ad69c0`（26,460,853 B = 25.2MB，versionCode 20282 / versionName 2026.11.21）；放大截图确认新照片外壳、米色标签专辑图（压暗减轻后清晰）、凹槽四周可见棕色卷盘、两轮齿轮清晰、左卷大于右卷；间隔 8 秒两帧卷盘区约 5.7% 像素变化，联动实证。注：验证后段 MuMu 窗口被宿主重排到屏幕外（rect 负 X）导致 adb 触摸落在桌面、直接 `am start .CarPlayerActivity` 因无 Flutter 桥接数据呈 0:00 空壳，均属验证环境问题，非代码崩溃（logcat 无 FATAL）。
 - 状态：**未提交 / 未 push / 未打 tag / 未发版**；真车机观感待用户评估。
 
+**2026-11-22 续六十三（修复，未发版）：车机模式锁定横屏，冷启动首屏即为车机布局**
+
+- 触发：用户「勾选车机模式后，第一次打开软件，车机模式没有完全生效，进入车机全屏再返回才生效，修复一下」。诉求是**冷启动首帧即完整生效**，不再靠进出车机全屏补触发。
+- 根因（`lib/controllers/theme_controller.dart` `applyOrientations`）：车机模式分支原为 `setPreferredOrientations([portraitUp, portraitDown, landscapeLeft, landscapeRight])`——只「允许」横屏而不「锁定」横屏。而 `AppShell._buildShell` 的车机布局（`CarLeftPlayerPanel` + `_buildCarTopNavBar`）**仅在 `isLandscape && carModeEnabled` 时渲染**，车机界面本身只有横屏形态。因此在「系统自动旋转关闭」或「设备停在竖屏」的机器上冷启动会一直停在竖屏普通布局；用户手动进一次 `CarPlayerActivity`（manifest 声明的 `sensorLandscape`）把它掰成横屏，返回后 `MainActivity` 仍保持横屏，车机布局才「补生效」——这正好解释了用户的观察。
+- 设备态实证：`adb root` 读 `/data/data/com.hoilai.mm.music/shared_prefs/FlutterSharedPreferences.xml`，真实偏好为 `flutter.theme.car_mode_enabled=true`、`flutter.theme.landscape_enabled=false`、`flutter.theme.liquid_glass_enabled=true`；MuMu 模拟器 `accelerometer_rotation=0`、`user_rotation=0`、`mCurrentRotation=ROTATION_0`、`Physical size 1440x2560`（`Override density 160` ⇒ DPR 1.0，`isTabletByPlatform()` 为 true）。
+- 修复（仅改 `applyOrientations` 的车机分支，两行语义）：
+  ```dart
+  if (_carModeEnabled) {
+    // 车机模式：锁定横屏（允许反向横屏），保证冷启动首帧就是车机布局。
+    SystemChrome.setPreferredOrientations(const [
+      DeviceOrientation.landscapeLeft,
+      DeviceOrientation.landscapeRight,
+    ]);
+  } else if (isTablet || _landscapeEnabled) { ...原样... } else { ...原样... }
+  ```
+  其余两条分支（`isTablet || _landscapeEnabled` 全向解锁、否则 `portraitUp` 竖屏锁）一字未动。
+- 验证（MuMu，构建 `scripts/build-android.bat` → `assembleRelease` 62.4s，exit 0；artifact 30.6MB，`versionCode=20287`）：
+  1. 竖屏锁定（`accelerometer_rotation=0` + `user_rotation=0`）下 `am force-stop` 后冷启动：0.4s 帧为竖屏**启动页**（白底居中应用图标），1.0s 帧已变 `2560×1440` 横屏启动页——**旋转发生在启动页阶段，主界面出现前就已是横屏**，故全程没有任何「竖屏手机版布局」闪现；7s 帧为完整车机布局（左侧常驻播放面板：封面/歌名「珊瑚海」/进度条/播放控制；顶栏：搜索框 + 我的/推荐/电台 + 排行/设置图标）。
+  2. 二次热态冷启动连拍 6 帧**全部** `2560×1440`，`dumpsys window` 为 `mCurrentRotation=ROTATION_90`。
+  3. 回归：备份偏好后把 `car_mode_enabled` 临时改为 `false`（`sed` 直接改 XML，App 已 force-stop）再冷启动 → `mCurrentRotation=ROTATION_0`、`1440×2560` 竖屏普通布局（该机 DPR=1.0 故 `width 1440 ≥ 720` 走 `NavigationRail`），**无左侧播放面板**；随后用备份还原并校验 `car_mode_enabled=true` 成功，再冷启动仍为车机布局。
+- 状态：**已提交（本地）/ 未 push / 未打 tag / 未发版**。源码版本号保持 `2026.11.22+20287`（与线上已发布的 20287 内容不同），**下次发版需 bump 至 `+20288`**（`pubspec.yaml` 与 `lib/config/app_config.dart` 两处）。
+- 截图留证：`screenshots/diag2/f1.png`（0.4s 竖屏启动页）、`f2.png`（1.0s 横屏启动页）、`f4.png` / `z1.png`（最终车机布局）、`g1~g6.png`（热态冷启动 6 帧全横屏）、`n1.png`（车机模式关闭下的竖屏回归）。
+
 **2026-11-22 续六十二（发版）：删除今日旧版重发 v2026.11.22+20287**
 - 触发：用户「删除今天的版本，重新发新版」。本版在 20286 基础上收口续六十一（黑胶圆盘与歌名间距修复）；上文续六十一「未发版」标注以本节为准。
 - 删除：旧 Release `454388195`（v2026.11.22+20286，资产 `jiujiu-music-2026.11.22-20286.apk`）+ 远端 `refs/tags/v2026.11.22`（annotated `9f438a2`）；本地 tag 此前已删。删除后 releases=0 / remote tags=0。
