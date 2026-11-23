@@ -71,6 +71,10 @@ class CarPlayerActivity : Activity() {
     private lateinit var infoQualityBadge: TextView
     private lateinit var infoQualityLabel: TextView
     private lateinit var infoQualityArrow: ImageView
+    // 音质按钮下方就地展开的三档选择（替代原底部弹窗）
+    private lateinit var infoQualityOptions: LinearLayout
+    private val qualityOptionViews = mutableListOf<TextView>()
+    private var qualityOptionsExpanded = false
     private lateinit var seek: SeekBar
     private lateinit var seekRow: LinearLayout
     private lateinit var climaxDot: View
@@ -649,11 +653,11 @@ class CarPlayerActivity : Activity() {
             val h = dp(12f).toInt()
             val v = dp(6f).toInt()
             setPadding(h, v, h, v)
-            // 音质徽章本身就是按钮：点击直接弹出三档选择，无需绕「更多」面板。
+            // 音质徽章本身就是按钮：点击在其正下方就地展开三档，不再另弹面板。
             isClickable = true
             isFocusable = true
             contentDescription = "切换音质"
-            setOnClickListener { showQualitySheet() }
+            setOnClickListener { toggleQualityOptions() }
         }
         infoQualityBadge = TextView(this).apply {
             textSize = 13f
@@ -705,6 +709,49 @@ class CarPlayerActivity : Activity() {
                 LinearLayout.LayoutParams.WRAP_CONTENT
             ).also { it.topMargin = dp(10f).toInt() }
         )
+        // 三档音质就地列在音质按钮正下方：点击胶囊展开/收起，点某档即切换。
+        // 信息区整体贴底且下方预留 48dp，展开行落在预留空间内，不挤压磁带。
+        infoQualityOptions = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
+            visibility = View.GONE
+            val pad = dp(6f).toInt()
+            setPadding(pad, pad, pad, pad)
+            background = GradientDrawable().apply {
+                cornerRadius = dp(12f)
+                setColor(0x33000000.toInt())
+                setStroke(dp(1f).toInt().coerceAtLeast(1), 0x33FFFFFF.toInt())
+            }
+        }
+        listOf("标准 128K" to 0, "高品 320K" to 1, "无损 FLAC" to 2).forEach { (label, idx) ->
+            val btn = TextView(this).apply {
+                text = label
+                textSize = 11f
+                setTypeface(typeface, android.graphics.Typeface.BOLD)
+                gravity = Gravity.CENTER
+                val hp = dp(9f).toInt()
+                val vp = dp(6f).toInt()
+                setPadding(hp, vp, hp, vp)
+                isClickable = true
+                contentDescription = label
+                setOnClickListener { selectQuality(idx) }
+            }
+            qualityOptionViews.add(btn)
+            infoQualityOptions.addView(
+                btn,
+                LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT
+                ).also { if (idx > 0) it.marginStart = dp(4f).toInt() }
+            )
+        }
+        stack.addView(
+            infoQualityOptions,
+            LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).also { it.topMargin = dp(6f).toInt() }
+        )
         applyTrackQuality()
         return stack
     }
@@ -749,6 +796,43 @@ class CarPlayerActivity : Activity() {
         infoQualityArrow.setColorFilter(badgeColor)
         infoQualityBadge.text = qualityBadge.ifEmpty { "—" }
         infoQualityLabel.text = qualityLabel.ifEmpty { "音质" }
+        applyQualityOptions()
+    }
+
+    /** 点击音质胶囊：在其正下方就地展开/收起三档按钮。 */
+    private fun toggleQualityOptions(expand: Boolean? = null) {
+        if (!::infoQualityOptions.isInitialized) return
+        val toExpand = expand ?: !qualityOptionsExpanded
+        qualityOptionsExpanded = toExpand
+        infoQualityOptions.visibility = if (toExpand) View.VISIBLE else View.GONE
+        infoQualityArrow.rotation = if (toExpand) 90f else -90f
+    }
+
+    /** 三档按钮选中态：当前档高亮描边，其余弱描边。 */
+    private fun applyQualityOptions() {
+        if (!::infoQualityOptions.isInitialized) return
+        qualityOptionViews.forEachIndexed { idx, btn ->
+            val selected = idx == qualityIndex
+            btn.background = GradientDrawable().apply {
+                cornerRadius = dp(8f)
+                setColor(if (selected) 0x3DFFFFFF.toInt() else 0x12FFFFFF.toInt())
+                setStroke(
+                    dp(1f).toInt().coerceAtLeast(1),
+                    if (selected) 0x99FFFFFF.toInt() else 0x2EFFFFFF.toInt()
+                )
+            }
+            btn.setTextColor(if (selected) 0xFFFFFFFF.toInt() else 0xB3FFFFFF.toInt())
+        }
+    }
+
+    /** 就地选中音质：先本地刷新徽章与选中态，发事件由 Flutter 重载后回推 meta 校正。 */
+    private fun selectQuality(idx: Int) {
+        qualityIndex = idx
+        qualityBadge = when (idx) { 2 -> "FLAC"; 1 -> "320K"; else -> "128K" }
+        qualityLabel = when (idx) { 2 -> "无损音质"; 1 -> "高品音质"; else -> "标准音质" }
+        applyTrackQuality()
+        toggleQualityOptions(false)
+        CarPlayerBridge.sendEvent("setQuality", mapOf("qualityIndex" to idx))
     }
 
     private fun marqueeText(sizeSp: Float, color: Int, bold: Boolean): TextView =
@@ -1444,25 +1528,6 @@ class CarPlayerActivity : Activity() {
         sheet = null
     }
 
-    /**
-     * 音质三档选择面板：铭牌上的音质徽章与「更多」里的音质磁贴共用同一入口，
-     * 选中态取当前 meta 的 qualityIndex；行点击先关面板再发 setQuality，
-     * Flutter 重载歌曲后回推 meta，onMeta 会刷新徽章文字与配色。
-     */
-    private fun showQualitySheet() {
-        openSheet("切换音质", listOf(
-            Row("标准音质", "128K", R.drawable.ic_ms_music_note, selected = qualityIndex == 0) {
-                CarPlayerBridge.sendEvent("setQuality", mapOf("qualityIndex" to 0))
-            },
-            Row("高品音质", "320K", R.drawable.ic_ms_high_quality, selected = qualityIndex == 1) {
-                CarPlayerBridge.sendEvent("setQuality", mapOf("qualityIndex" to 1))
-            },
-            Row("无损音质", "FLAC", R.drawable.ic_ms_graphic_eq, selected = qualityIndex == 2) {
-                CarPlayerBridge.sendEvent("setQuality", mapOf("qualityIndex" to 2))
-            }
-        ), subtitle = "会重新加载当前歌曲并尽量保持播放进度")
-    }
-
     /** 更多面板的一枚网格项/磁贴：图标 + 标题 + 可选副标题。 */
     private class Tile(val icon: Int, val title: String, val subtitle: String?, val onClick: () -> Unit)
 
@@ -1554,8 +1619,8 @@ class CarPlayerActivity : Activity() {
                 }
             }, subtitle = "调整音乐播放速度")
         })
-        tiles.add(Tile(R.drawable.ic_ms_high_quality, "音质：$qualityLabel", "切换当前播放音质") {
-            showQualitySheet()
+        tiles.add(Tile(R.drawable.ic_ms_high_quality, "音质：$qualityLabel", "在音质按钮下直接切换") {
+            toggleQualityOptions(true)
         })
         tiles.add(Tile(R.drawable.ic_ms_auto_awesome, "试听高潮", "播放歌曲高潮片段") {
             CarPlayerBridge.sendEvent("climax")
